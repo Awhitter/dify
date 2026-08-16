@@ -2,13 +2,12 @@ import type { NextConfig } from '@/next'
 import createMDX from '@next/mdx'
 import { codeInspectorPlugin } from 'code-inspector-plugin'
 import { env } from './env'
-
 const isDev = process.env.NODE_ENV === 'development'
 const withMDX = createMDX()
+const API_PROXY_TARGET = process.env.API_PROXY_TARGET || 'https://api.katailyst.com'
 const allowedDevOrigins = process.env.NEXT_ALLOWED_DEV_ORIGINS?.split(',')
-  .map((origin) => origin.trim())
+  .map(origin => origin.trim())
   .filter(Boolean)
-
 const nextConfig: NextConfig = {
   basePath: env.NEXT_PUBLIC_BASE_PATH,
   ...(allowedDevOrigins?.length ? { allowedDevOrigins } : {}),
@@ -19,11 +18,9 @@ const nextConfig: NextConfig = {
       bundler: 'turbopack',
     }),
   },
-  productionBrowserSourceMaps: false, // enable browser source map generation during the production build
-  // Configure pageExtensions to include md and mdx
+  productionBrowserSourceMaps: false,
   pageExtensions: ['ts', 'tsx', 'js', 'jsx', 'md', 'mdx'],
   typescript: {
-    // https://nextjs.org/docs/api-reference/next.config.js/ignoring-typescript-errors
     ignoreBuildErrors: true,
   },
   async redirects() {
@@ -35,7 +32,14 @@ const nextConfig: NextConfig = {
       },
     ]
   },
-  // Deny framing on device-flow routes — no trusted embedder exists.
+  async rewrites() {
+    return [
+      { source: '/console/api/:path*', destination: `${API_PROXY_TARGET}/console/api/:path*` },
+      { source: '/api/:path*', destination: `${API_PROXY_TARGET}/api/:path*` },
+      { source: '/v1/:path*', destination: `${API_PROXY_TARGET}/v1/:path*` },
+      { source: '/files/:path*', destination: `${API_PROXY_TARGET}/files/:path*` },
+    ]
+  },
   async headers() {
     const antiFrame = [
       { key: 'X-Frame-Options', value: 'DENY' },
@@ -51,5 +55,4 @@ const nextConfig: NextConfig = {
     removeConsole: isDev ? false : { exclude: ['warn', 'error'] },
   },
 }
-
 export default withMDX(nextConfig)
