@@ -1,23 +1,31 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import * as React from 'react'
 import ItemOperation from '../index'
 
 vi.mock('@langgenius/dify-ui/dropdown-menu', () => {
-  const DropdownMenuContext = React.createContext<{ isOpen: boolean, setOpen: (open: boolean) => void } | null>(null)
+  const DropdownMenuContext = React.createContext<{
+    isOpen: boolean
+    setOpen: (open: boolean) => void
+  } | null>(null)
 
   const useDropdownMenuContext = () => {
     const context = React.use(DropdownMenuContext)
-    if (!context)
-      throw new Error('DropdownMenu components must be wrapped in DropdownMenu')
+    if (!context) throw new Error('DropdownMenu components must be wrapped in DropdownMenu')
     return context
   }
 
   return {
-    DropdownMenu: ({ children, open, onOpenChange }: { children: React.ReactNode, open: boolean, onOpenChange?: (open: boolean) => void }) => (
-      <DropdownMenuContext value={{ isOpen: open, setOpen: onOpenChange ?? vi.fn() }}>
-        <div data-testid="dropdown-menu" data-open={open}>{children}</div>
-      </DropdownMenuContext>
-    ),
+    DropdownMenu: ({ children, modal }: { children: React.ReactNode; modal?: boolean }) => {
+      const [isOpen, setIsOpen] = React.useState(false)
+
+      return (
+        <DropdownMenuContext value={{ isOpen, setOpen: setIsOpen }}>
+          <div data-modal={modal} data-open={isOpen} data-testid="dropdown-menu">
+            {children}
+          </div>
+        </DropdownMenuContext>
+      )
+    },
     DropdownMenuTrigger: ({
       children,
       onClick,
@@ -45,10 +53,13 @@ vi.mock('@langgenius/dify-ui/dropdown-menu', () => {
       popupProps?: React.HTMLAttributes<HTMLDivElement>
     }) => {
       const { isOpen } = useDropdownMenuContext()
-      if (!isOpen)
-        return null
+      if (!isOpen) return null
 
-      return <div data-testid="dropdown-content" {...popupProps}>{children}</div>
+      return (
+        <div data-testid="dropdown-content" {...popupProps}>
+          {children}
+        </div>
+      )
     },
     DropdownMenuItem: ({
       children,
@@ -99,7 +110,7 @@ describe('ItemOperation', () => {
     it('should render pin and delete actions when menu is open', async () => {
       renderComponent()
 
-      fireEvent.click(screen.getByTestId('item-operation-trigger'))
+      fireEvent.click(screen.getByRole('button', { name: 'common.operation.more' }))
 
       expect(await screen.findByText('explore.sidebar.action.pin')).toBeInTheDocument()
       expect(screen.getByText('explore.sidebar.action.delete')).toBeInTheDocument()
@@ -110,7 +121,7 @@ describe('ItemOperation', () => {
     it('should render rename action when isShowRenameConversation is true', async () => {
       renderComponent({ isShowRenameConversation: true })
 
-      fireEvent.click(screen.getByTestId('item-operation-trigger'))
+      fireEvent.click(screen.getByRole('button', { name: 'common.operation.more' }))
 
       expect(await screen.findByText('explore.sidebar.action.rename')).toBeInTheDocument()
     })
@@ -118,7 +129,7 @@ describe('ItemOperation', () => {
     it('should render unpin label when isPinned is true', async () => {
       renderComponent({ isPinned: true })
 
-      fireEvent.click(screen.getByTestId('item-operation-trigger'))
+      fireEvent.click(screen.getByRole('button', { name: 'common.operation.more' }))
 
       expect(await screen.findByText('explore.sidebar.action.unpin')).toBeInTheDocument()
     })
@@ -128,7 +139,7 @@ describe('ItemOperation', () => {
     it('should call togglePin when clicking pin action', async () => {
       const { props } = renderComponent()
 
-      fireEvent.click(screen.getByTestId('item-operation-trigger'))
+      fireEvent.click(screen.getByRole('button', { name: 'common.operation.more' }))
       fireEvent.click(await screen.findByText('explore.sidebar.action.pin'))
 
       expect(props.togglePin).toHaveBeenCalledTimes(1)
@@ -137,7 +148,7 @@ describe('ItemOperation', () => {
     it('should call onDelete when clicking delete action', async () => {
       const { props } = renderComponent()
 
-      fireEvent.click(screen.getByTestId('item-operation-trigger'))
+      fireEvent.click(screen.getByRole('button', { name: 'common.operation.more' }))
       fireEvent.click(await screen.findByText('explore.sidebar.action.delete'))
 
       expect(props.onDelete).toHaveBeenCalledTimes(1)
@@ -150,7 +161,7 @@ describe('ItemOperation', () => {
         onRenameConversation,
       })
 
-      fireEvent.click(screen.getByTestId('item-operation-trigger'))
+      fireEvent.click(screen.getByRole('button', { name: 'common.operation.more' }))
       fireEvent.click(await screen.findByText('explore.sidebar.action.rename'))
 
       expect(onRenameConversation).toHaveBeenCalledTimes(1)
@@ -158,37 +169,36 @@ describe('ItemOperation', () => {
   })
 
   describe('Edge Cases', () => {
-    it('should close the menu when mouse leaves the panel and item is not hovering', async () => {
-      renderComponent()
-      fireEvent.click(screen.getByTestId('item-operation-trigger'))
+    it('should keep the menu open after rerender', async () => {
+      const { props, rerender } = renderComponent()
+      fireEvent.click(screen.getByRole('button', { name: 'common.operation.more' }))
       await screen.findByText('explore.sidebar.action.pin')
-      const menu = screen.getByTestId('dropdown-content')
 
-      fireEvent.mouseEnter(menu)
-      fireEvent.mouseLeave(menu)
+      rerender(<ItemOperation {...props} />)
 
-      await waitFor(() => {
-        expect(screen.queryByText('explore.sidebar.action.pin')).not.toBeInTheDocument()
-      })
+      expect(screen.getByText('explore.sidebar.action.pin')).toBeInTheDocument()
     })
 
-    it('should stop propagation when clicking inside the dropdown content', async () => {
+    it('should render a non-modal menu', () => {
+      renderComponent()
+
+      expect(screen.getByTestId('dropdown-menu')).toHaveAttribute('data-modal', 'false')
+    })
+
+    it('should stop propagation when clicking menu actions', async () => {
       const onParentClick = vi.fn()
+      const togglePin = vi.fn()
 
       render(
         <div onClick={onParentClick}>
-          <ItemOperation
-            isPinned={false}
-            isShowDelete
-            togglePin={vi.fn()}
-            onDelete={vi.fn()}
-          />
+          <ItemOperation isPinned={false} isShowDelete togglePin={togglePin} onDelete={vi.fn()} />
         </div>,
       )
 
-      fireEvent.click(screen.getByTestId('item-operation-trigger'))
-      fireEvent.click(await screen.findByTestId('dropdown-content'))
+      fireEvent.click(screen.getByRole('button', { name: 'common.operation.more' }))
+      fireEvent.click(await screen.findByText('explore.sidebar.action.pin'))
 
+      expect(togglePin).toHaveBeenCalledTimes(1)
       expect(onParentClick).not.toHaveBeenCalled()
     })
   })

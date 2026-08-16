@@ -30,6 +30,7 @@ from graphon.entities import GraphInitParams
 from graphon.entities.graph_config import NodeConfigDictAdapter
 from graphon.errors import WorkflowNodeRunFailedError
 from graphon.file import File
+from graphon.filters import GraphEventFilterContext, ResponseStreamFilter, filter_graph_events
 from graphon.graph import Graph
 from graphon.graph_engine import GraphEngine, GraphEngineConfig
 from graphon.graph_engine.command_channels import CommandChannel, InMemoryChannel
@@ -45,7 +46,35 @@ logger = logging.getLogger(__name__)
 _file_access_controller = DatabaseFileAccessController()
 
 
+def iter_dify_graph_engine_events(
+    engine: GraphEngine,
+    response_stream_filter: ResponseStreamFilter | None = None,
+) -> Generator[GraphEngineEvent, None, None]:
+    """
+    Apply Dify's response streaming compatibility filter to GraphEngine events.
+
+    Graphon v0.5.0 emits raw variable stream chunks and requires callers to opt
+    into the legacy response-ordered stream behavior that Dify exposes to its
+    workflow runners and tests.
+
+    ``response_stream_filter``, when supplied, must be the same instance a
+    caller intends to persist on pause (see ``PauseStatePersistenceLayer``) so
+    the filter's ``paths_map`` reflects everything the engine has actually
+    streamed for this run.
+    """
+    yield from filter_graph_events(
+        engine.run(),
+        context=GraphEventFilterContext.from_engine(engine),
+        filters=[response_stream_filter or ResponseStreamFilter()],
+    )
+
+
 class _WorkflowChildEngineBuilder:
+    tenant_id: str
+
+    def __init__(self, *, tenant_id: str) -> None:
+        self.tenant_id = tenant_id
+
     @staticmethod
     def _has_node_id(graph_config: Mapping[str, Any], node_id: str) -> bool | None:
         """
@@ -107,7 +136,7 @@ class _WorkflowChildEngineBuilder:
             config=config,
             child_engine_builder=self,
         )
-        child_engine.layer(LLMQuotaLayer())
+        child_engine.layer(LLMQuotaLayer(tenant_id=self.tenant_id))
         return child_engine
 
 
@@ -146,6 +175,7 @@ class WorkflowEntry:
         variable_pool: VariablePool,
         graph_runtime_state: GraphRuntimeState,
         command_channel: CommandChannel | None = None,
+        response_stream_filter: ResponseStreamFilter | None = None,
     ) -> None:
         """
         Init workflow entry
@@ -162,6 +192,8 @@ class WorkflowEntry:
         :param variable_pool: variable pool
         :param graph_runtime_state: pre-created graph runtime state
         :param command_channel: command channel for external control (optional, defaults to InMemoryChannel)
+        :param response_stream_filter: pre-restored filter for resumed runs (optional, defaults to a fresh
+            ResponseStreamFilter for runs with no prior pause)
         :param thread_pool_id: thread pool id
         """
         # check call depth
@@ -174,9 +206,10 @@ class WorkflowEntry:
             command_channel = InMemoryChannel()
 
         self.command_channel = command_channel
+        self._response_stream_filter = response_stream_filter or ResponseStreamFilter()
         execution_context = capture_current_context()
         graph_runtime_state.execution_context = execution_context
-        self._child_engine_builder = _WorkflowChildEngineBuilder()
+        self._child_engine_builder = _WorkflowChildEngineBuilder(tenant_id=tenant_id)
         self.graph_engine = GraphEngine(
             workflow_id=workflow_id,
             graph=graph,
@@ -208,7 +241,7 @@ class WorkflowEntry:
             max_steps=dify_config.WORKFLOW_MAX_EXECUTION_STEPS, max_time=dify_config.WORKFLOW_MAX_EXECUTION_TIME
         )
         self.graph_engine.layer(limits_layer)
-        self.graph_engine.layer(LLMQuotaLayer())
+        self.graph_engine.layer(LLMQuotaLayer(tenant_id=tenant_id))
 
         # Add observability layer when OTel is enabled
         if dify_config.ENABLE_OTEL or is_instrument_flag_enabled():
@@ -218,8 +251,8 @@ class WorkflowEntry:
         graph_engine = self.graph_engine
 
         try:
-            # run workflow
-            generator = graph_engine.run()
+            # Preserve Dify's response-stream semantics on top of Graphon 0.5.0.
+            generator = iter_dify_graph_engine_events(graph_engine, self._response_stream_filter)
             yield from generator
         except GenerateTaskStoppedError:
             pass

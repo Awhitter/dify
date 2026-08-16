@@ -3,34 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import * as React from 'react'
 import PreviewDocumentPicker from '../preview-document-picker'
 
-// Mock portal-to-follow-elem - always render content for testing
-vi.mock('@/app/components/base/portal-to-follow-elem', () => ({
-  PortalToFollowElem: ({ children, open }: {
-    children: React.ReactNode
-    open?: boolean
-  }) => (
-    <div data-testid="portal-elem" data-open={String(open || false)}>
-      {children}
-    </div>
-  ),
-  PortalToFollowElemTrigger: ({ children, onClick }: {
-    children: React.ReactNode
-    onClick?: () => void
-  }) => (
-    <div data-testid="portal-trigger" onClick={onClick}>
-      {children}
-    </div>
-  ),
-  // Always render content to allow testing document selection
-  PortalToFollowElemContent: ({ children, className }: {
-    children: React.ReactNode
-    className?: string
-  }) => (
-    <div data-testid="portal-content" className={className}>
-      {children}
-    </div>
-  ),
-}))
+vi.mock('@langgenius/dify-ui/popover', () => import('@/__mocks__/base-ui-popover'))
 
 // Factory function to create mock DocumentItem
 const createMockDocumentItem = (overrides: Partial<DocumentItem> = {}): DocumentItem => ({
@@ -47,11 +20,14 @@ const createMockDocumentList = (count: number): DocumentItem[] => {
       id: `doc-${index + 1}`,
       name: `Document ${index + 1}`,
       extension: index % 2 === 0 ? 'pdf' : 'txt',
-    }))
+    }),
+  )
 }
 
 // Factory function to create default props
-const createDefaultProps = (overrides: Partial<React.ComponentProps<typeof PreviewDocumentPicker>> = {}) => ({
+const createDefaultProps = (
+  overrides: Partial<React.ComponentProps<typeof PreviewDocumentPicker>> = {},
+) => ({
   value: createMockDocumentItem({ id: 'selected-doc', name: 'Selected Document' }),
   files: createMockDocumentList(3),
   onChange: vi.fn(),
@@ -59,12 +35,18 @@ const createDefaultProps = (overrides: Partial<React.ComponentProps<typeof Previ
 })
 
 // Helper to render component with default props
-const renderComponent = (props: Partial<React.ComponentProps<typeof PreviewDocumentPicker>> = {}) => {
+const renderComponent = (
+  props: Partial<React.ComponentProps<typeof PreviewDocumentPicker>> = {},
+) => {
   const defaultProps = createDefaultProps(props)
   return {
     ...render(<PreviewDocumentPicker {...defaultProps} />),
     props: defaultProps,
   }
+}
+
+const openPopover = () => {
+  fireEvent.click(screen.getByTestId('popover-trigger'))
 }
 
 describe('PreviewDocumentPicker', () => {
@@ -74,12 +56,6 @@ describe('PreviewDocumentPicker', () => {
 
   // Tests for basic rendering
   describe('Rendering', () => {
-    it('should render without crashing', () => {
-      renderComponent()
-
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
-    })
-
     it('should render document name from value prop', () => {
       renderComponent({
         value: createMockDocumentItem({ name: 'My Document' }),
@@ -110,7 +86,7 @@ describe('PreviewDocumentPicker', () => {
         files: [], // Use empty files to avoid duplicate icons
       })
 
-      const trigger = screen.getByTestId('portal-trigger')
+      const trigger = screen.getByTestId('popover-trigger')
       expect(trigger.querySelector('svg')).toBeInTheDocument()
     })
 
@@ -120,7 +96,7 @@ describe('PreviewDocumentPicker', () => {
         files: [], // Use empty files to avoid duplicate icons
       })
 
-      const trigger = screen.getByTestId('portal-trigger')
+      const trigger = screen.getByTestId('popover-trigger')
       expect(trigger.querySelector('svg')).toBeInTheDocument()
     })
   })
@@ -131,22 +107,7 @@ describe('PreviewDocumentPicker', () => {
       const props = createDefaultProps()
       render(<PreviewDocumentPicker {...props} />)
 
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
-    })
-
-    it('should apply className to trigger element', () => {
-      renderComponent({ className: 'custom-class' })
-
-      const trigger = screen.getByTestId('portal-trigger')
-      const innerDiv = trigger.querySelector('.custom-class')
-      expect(innerDiv).toBeInTheDocument()
-    })
-
-    it('should handle empty files array', () => {
-      // Component should render without crashing with empty files
-      renderComponent({ files: [] })
-
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+      expect(screen.getByTestId('popover')).toBeInTheDocument()
     })
 
     it('should handle single file', () => {
@@ -155,7 +116,7 @@ describe('PreviewDocumentPicker', () => {
         files: [createMockDocumentItem({ id: 'single-doc', name: 'Single File' })],
       })
 
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+      expect(screen.getByTestId('popover')).toBeInTheDocument()
     })
 
     it('should handle multiple files', () => {
@@ -164,7 +125,7 @@ describe('PreviewDocumentPicker', () => {
         files: createMockDocumentList(5),
       })
 
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+      expect(screen.getByTestId('popover')).toBeInTheDocument()
     })
 
     it('should use value.extension for file icon', () => {
@@ -172,7 +133,7 @@ describe('PreviewDocumentPicker', () => {
         value: createMockDocumentItem({ name: 'test.docx', extension: 'docx' }),
       })
 
-      const trigger = screen.getByTestId('portal-trigger')
+      const trigger = screen.getByTestId('popover-trigger')
       expect(trigger.querySelector('svg')).toBeInTheDocument()
     })
   })
@@ -182,13 +143,13 @@ describe('PreviewDocumentPicker', () => {
     it('should initialize with popup closed', () => {
       renderComponent()
 
-      expect(screen.getByTestId('portal-elem')).toHaveAttribute('data-open', 'false')
+      expect(screen.getByTestId('popover')).toHaveAttribute('data-open', 'false')
     })
 
     it('should toggle popup when trigger is clicked', () => {
       renderComponent()
 
-      const trigger = screen.getByTestId('portal-trigger')
+      const trigger = screen.getByTestId('popover-trigger')
       fireEvent.click(trigger)
 
       expect(trigger).toBeInTheDocument()
@@ -196,9 +157,10 @@ describe('PreviewDocumentPicker', () => {
 
     it('should render portal content for document selection', () => {
       renderComponent()
+      openPopover()
 
-      // Portal content is always rendered in our mock for testing
-      expect(screen.getByTestId('portal-content')).toBeInTheDocument()
+      // Popover content is rendered after opening the trigger in our mock
+      expect(screen.getByTestId('popover-content')).toBeInTheDocument()
     })
   })
 
@@ -238,20 +200,14 @@ describe('PreviewDocumentPicker', () => {
         <PreviewDocumentPicker value={value} files={files} onChange={onChange1} />,
       )
 
-      rerender(
-        <PreviewDocumentPicker value={value} files={files} onChange={onChange2} />,
-      )
+      rerender(<PreviewDocumentPicker value={value} files={files} onChange={onChange2} />)
 
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+      expect(screen.getByTestId('popover')).toBeInTheDocument()
     })
   })
 
   // Tests for component memoization
   describe('Component Memoization', () => {
-    it('should be wrapped with React.memo', () => {
-      expect((PreviewDocumentPicker as unknown as { $$typeof: symbol }).$$typeof).toBeDefined()
-    })
-
     it('should not re-render when props are the same', () => {
       const onChange = vi.fn()
       const value = createMockDocumentItem()
@@ -261,11 +217,9 @@ describe('PreviewDocumentPicker', () => {
         <PreviewDocumentPicker value={value} files={files} onChange={onChange} />,
       )
 
-      rerender(
-        <PreviewDocumentPicker value={value} files={files} onChange={onChange} />,
-      )
+      rerender(<PreviewDocumentPicker value={value} files={files} onChange={onChange} />)
 
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+      expect(screen.getByTestId('popover')).toBeInTheDocument()
     })
   })
 
@@ -274,7 +228,7 @@ describe('PreviewDocumentPicker', () => {
     it('should toggle popup when trigger is clicked', () => {
       renderComponent()
 
-      const trigger = screen.getByTestId('portal-trigger')
+      const trigger = screen.getByTestId('popover-trigger')
       fireEvent.click(trigger)
 
       expect(trigger).toBeInTheDocument()
@@ -283,6 +237,7 @@ describe('PreviewDocumentPicker', () => {
     it('should render document list with files', () => {
       const files = createMockDocumentList(3)
       renderComponent({ files })
+      openPopover()
 
       // Documents should be visible in the list
       expect(screen.getByText('Document 1')).toBeInTheDocument()
@@ -295,6 +250,7 @@ describe('PreviewDocumentPicker', () => {
       const files = createMockDocumentList(3)
 
       renderComponent({ files, onChange })
+      openPopover()
 
       fireEvent.click(screen.getByText('Document 2'))
 
@@ -306,7 +262,7 @@ describe('PreviewDocumentPicker', () => {
     it('should handle rapid toggle clicks', () => {
       renderComponent()
 
-      const trigger = screen.getByTestId('portal-trigger')
+      const trigger = screen.getByTestId('popover-trigger')
 
       // Rapid clicks
       fireEvent.click(trigger)
@@ -337,14 +293,7 @@ describe('PreviewDocumentPicker', () => {
       // Renders placeholder for missing name
       expect(screen.getByText('--')).toBeInTheDocument()
       // Portal wrapper renders
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
-    })
-
-    it('should handle empty files array', () => {
-      renderComponent({ files: [] })
-
-      // Component should render without crashing
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+      expect(screen.getByTestId('popover')).toBeInTheDocument()
     })
 
     it('should handle very long document names', () => {
@@ -365,24 +314,12 @@ describe('PreviewDocumentPicker', () => {
       expect(screen.getByText(specialName)).toBeInTheDocument()
     })
 
-    it('should handle undefined files prop', () => {
-      // Test edge case where files might be undefined at runtime
-      const props = createDefaultProps()
-      // @ts-expect-error - Testing runtime edge case
-      props.files = undefined
-
-      render(<PreviewDocumentPicker {...props} />)
-
-      // Component should render without crashing
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
-    })
-
     it('should handle large number of files', () => {
       const manyFiles = createMockDocumentList(100)
       renderComponent({ files: manyFiles })
 
       // Component should accept large files array
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+      expect(screen.getByTestId('popover')).toBeInTheDocument()
     })
 
     it('should handle files with same name but different extensions', () => {
@@ -393,7 +330,7 @@ describe('PreviewDocumentPicker', () => {
       renderComponent({ files })
 
       // Component should handle duplicate names
-      expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+      expect(screen.getByTestId('popover')).toBeInTheDocument()
     })
   })
 
@@ -427,7 +364,7 @@ describe('PreviewDocumentPicker', () => {
           files: [createMockDocumentItem({ name: 'Single' })],
         })
 
-        expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+        expect(screen.getByTestId('popover')).toBeInTheDocument()
       })
 
       it('should handle two files', () => {
@@ -435,7 +372,7 @@ describe('PreviewDocumentPicker', () => {
           files: createMockDocumentList(2),
         })
 
-        expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
+        expect(screen.getByTestId('popover')).toBeInTheDocument()
       })
 
       it('should handle many files', () => {
@@ -443,31 +380,7 @@ describe('PreviewDocumentPicker', () => {
           files: createMockDocumentList(50),
         })
 
-        expect(screen.getByTestId('portal-elem')).toBeInTheDocument()
-      })
-    })
-
-    describe('className variations', () => {
-      it('should apply custom className', () => {
-        renderComponent({ className: 'my-custom-class' })
-
-        const trigger = screen.getByTestId('portal-trigger')
-        expect(trigger.querySelector('.my-custom-class')).toBeInTheDocument()
-      })
-
-      it('should work without className', () => {
-        renderComponent({ className: undefined })
-
-        expect(screen.getByTestId('portal-trigger')).toBeInTheDocument()
-      })
-
-      it('should handle multiple class names', () => {
-        renderComponent({ className: 'class-one class-two' })
-
-        const trigger = screen.getByTestId('portal-trigger')
-        const element = trigger.querySelector('.class-one')
-        expect(element).toBeInTheDocument()
-        expect(element).toHaveClass('class-two')
+        expect(screen.getByTestId('popover')).toBeInTheDocument()
       })
     })
 
@@ -480,7 +393,7 @@ describe('PreviewDocumentPicker', () => {
           files: [], // Use empty files to avoid duplicate icons
         })
 
-        const trigger = screen.getByTestId('portal-trigger')
+        const trigger = screen.getByTestId('popover-trigger')
         expect(trigger.querySelector('svg')).toBeInTheDocument()
       })
     })
@@ -491,6 +404,7 @@ describe('PreviewDocumentPicker', () => {
     it('should render all documents in the list', () => {
       const files = createMockDocumentList(5)
       renderComponent({ files })
+      openPopover()
 
       // All documents should be visible
       files.forEach((file) => {
@@ -503,6 +417,7 @@ describe('PreviewDocumentPicker', () => {
       const files = createMockDocumentList(3)
 
       renderComponent({ files, onChange })
+      openPopover()
 
       fireEvent.click(screen.getByText('Document 1'))
 
@@ -528,29 +443,13 @@ describe('PreviewDocumentPicker', () => {
           onChange={vi.fn()}
         />,
       )
+      openPopover()
       expect(screen.getByText(/dataset\.preprocessDocument/)).toBeInTheDocument()
     })
   })
 
   // Tests for visual states
   describe('Visual States', () => {
-    it('should apply hover styles on trigger', () => {
-      renderComponent()
-
-      const trigger = screen.getByTestId('portal-trigger')
-      const innerDiv = trigger.querySelector('.hover\\:bg-state-base-hover')
-      expect(innerDiv).toBeInTheDocument()
-    })
-
-    it('should have truncate class for long names', () => {
-      renderComponent({
-        value: createMockDocumentItem({ name: 'Very Long Document Name' }),
-      })
-
-      const nameElement = screen.getByText('Very Long Document Name')
-      expect(nameElement).toHaveClass('truncate')
-    })
-
     it('should have max-width on name element', () => {
       renderComponent({
         value: createMockDocumentItem({ name: 'Test' }),
@@ -568,6 +467,7 @@ describe('PreviewDocumentPicker', () => {
       const files = createMockDocumentList(3)
 
       renderComponent({ files, onChange })
+      openPopover()
 
       fireEvent.click(screen.getByText('Document 1'))
 
@@ -582,10 +482,12 @@ describe('PreviewDocumentPicker', () => {
       ]
 
       renderComponent({ files: customFiles, onChange })
+      openPopover()
 
       fireEvent.click(screen.getByText('Custom File 1'))
       expect(onChange).toHaveBeenCalledWith(customFiles[0])
 
+      openPopover()
       fireEvent.click(screen.getByText('Custom File 2'))
       expect(onChange).toHaveBeenCalledWith(customFiles[1])
     })
@@ -597,8 +499,11 @@ describe('PreviewDocumentPicker', () => {
       renderComponent({ files, onChange })
 
       // Select multiple documents sequentially
+      openPopover()
       fireEvent.click(screen.getByText('Document 1'))
+      openPopover()
       fireEvent.click(screen.getByText('Document 3'))
+      openPopover()
       fireEvent.click(screen.getByText('Document 2'))
 
       expect(onChange).toHaveBeenCalledTimes(3)

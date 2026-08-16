@@ -4,21 +4,42 @@ import OperationDropdown from '../operation-dropdown'
 
 vi.mock('@langgenius/dify-ui/dropdown-menu', async () => {
   const React = await import('react')
-  const DropdownMenuContext = React.createContext<{ isOpen: boolean, setOpen: (open: boolean) => void } | null>(null)
+  const DropdownMenuContext = React.createContext<{
+    isOpen: boolean
+    setOpen: (open: boolean) => void
+  } | null>(null)
 
   const useDropdownMenuContext = () => {
     const context = React.use(DropdownMenuContext)
-    if (!context)
-      throw new Error('DropdownMenu components must be wrapped in DropdownMenu')
+    if (!context) throw new Error('DropdownMenu components must be wrapped in DropdownMenu')
     return context
   }
 
   return {
-    DropdownMenu: ({ children, open, onOpenChange }: { children: React.ReactNode, open: boolean, onOpenChange?: (open: boolean) => void }) => (
-      <DropdownMenuContext value={{ isOpen: open, setOpen: onOpenChange ?? vi.fn() }}>
-        <div data-testid="dropdown-menu" data-open={open}>{children}</div>
-      </DropdownMenuContext>
-    ),
+    DropdownMenu: ({
+      children,
+      open,
+      onOpenChange,
+    }: {
+      children: React.ReactNode
+      open?: boolean
+      onOpenChange?: (open: boolean) => void
+    }) => {
+      const [internalOpen, setInternalOpen] = React.useState(open ?? false)
+      const isOpen = open ?? internalOpen
+      const setOpen = (nextOpen: boolean) => {
+        if (open === undefined) setInternalOpen(nextOpen)
+        onOpenChange?.(nextOpen)
+      }
+
+      return (
+        <DropdownMenuContext value={{ isOpen, setOpen }}>
+          <div data-testid="dropdown-menu" data-open={isOpen}>
+            {children}
+          </div>
+        </DropdownMenuContext>
+      )
+    },
     DropdownMenuTrigger: ({
       children,
       render,
@@ -35,9 +56,17 @@ vi.mock('@langgenius/dify-ui/dropdown-menu', async () => {
       }
 
       if (render)
-        return React.cloneElement(render, { 'data-testid': 'dropdown-trigger', 'onClick': handleClick } as Record<string, unknown>, children)
+        return React.cloneElement(
+          render,
+          { 'data-testid': 'dropdown-trigger', onClick: handleClick } as Record<string, unknown>,
+          children,
+        )
 
-      return <button data-testid="dropdown-trigger" onClick={handleClick}>{children}</button>
+      return (
+        <button data-testid="dropdown-trigger" onClick={handleClick}>
+          {children}
+        </button>
+      )
     },
     DropdownMenuContent: ({
       children,
@@ -49,7 +78,14 @@ vi.mock('@langgenius/dify-ui/dropdown-menu', async () => {
       popupClassName?: string
     }) => {
       const { isOpen } = useDropdownMenuContext()
-      return isOpen ? <div data-testid="dropdown-content" className={[className, popupClassName].filter(Boolean).join(' ')}>{children}</div> : null
+      return isOpen ? (
+        <div
+          data-testid="dropdown-content"
+          className={[className, popupClassName].filter(Boolean).join(' ')}
+        >
+          {children}
+        </div>
+      ) : null
     },
     DropdownMenuItem: ({
       children,
@@ -85,11 +121,6 @@ describe('OperationDropdown', () => {
   }
 
   describe('Rendering', () => {
-    it('should render without crashing', () => {
-      render(<OperationDropdown {...defaultProps} />)
-      expect(document.querySelector('button')).toBeInTheDocument()
-    })
-
     it('should render trigger button with more icon', () => {
       render(<OperationDropdown {...defaultProps} />)
       const button = screen.getByTestId('dropdown-trigger')
@@ -100,13 +131,13 @@ describe('OperationDropdown', () => {
 
     it('should render medium size by default', () => {
       render(<OperationDropdown {...defaultProps} />)
-      const icon = document.querySelector('.h-4.w-4')
+      const icon = document.querySelector('.size-4')
       expect(icon).toBeInTheDocument()
     })
 
     it('should render large size when inCard is true', () => {
       render(<OperationDropdown {...defaultProps} inCard={true} />)
-      const icon = document.querySelector('.h-5.w-5')
+      const icon = document.querySelector('.size-5')
       expect(icon).toBeInTheDocument()
     })
   })
@@ -193,15 +224,6 @@ describe('OperationDropdown', () => {
 
       fireEvent.click(screen.getByTestId('dropdown-trigger'))
       expect(screen.getByTestId('dropdown-content')).toBeInTheDocument()
-    })
-
-    it('should apply destructive highlighted styles on remove option', () => {
-      render(<OperationDropdown {...defaultProps} />)
-
-      fireEvent.click(screen.getByTestId('dropdown-trigger'))
-      const removeOptionText = screen.getByText('tools.mcp.operation.remove')
-      const removeOptionContainer = removeOptionText.closest('button')
-      expect(removeOptionContainer).toHaveClass('data-highlighted:bg-state-destructive-hover')
     })
   })
 

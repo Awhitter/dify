@@ -180,7 +180,7 @@ class TestSetDefaultProvider:
         session.scalar.return_value = None
 
         with pytest.raises(ValueError, match="provider not found"):
-            BuiltinToolManageService.set_default_provider("t", "u", "p", "id")
+            BuiltinToolManageService.set_default_provider("t", "p", "id")
 
     @patch(f"{MODULE}.sessionmaker")
     @patch(f"{MODULE}.db")
@@ -189,10 +189,28 @@ class TestSetDefaultProvider:
         target = MagicMock()
         session.scalar.return_value = target
 
-        result = BuiltinToolManageService.set_default_provider("t", "u", "p", "id")
+        result = BuiltinToolManageService.set_default_provider("t", "p", "id")
 
         assert result == {"result": "success"}
         assert target.is_default is True
+
+    @patch(f"{MODULE}.sessionmaker")
+    @patch(f"{MODULE}.db")
+    def test_clear_default_is_tenant_scoped_not_user_scoped(self, mock_db, mock_sm_cls):
+        # Regression: clearing prior defaults must NOT filter by user_id, otherwise
+        # two workspace members can each leave their own credential as default at
+        # the same time (the default flag is tenant-scoped, not per-user).
+        session = _mock_sessionmaker(mock_sm_cls)
+        session.scalar.return_value = MagicMock()
+
+        BuiltinToolManageService.set_default_provider("tenant-1", "google", "cred-id")
+
+        session.execute.assert_called_once()
+        update_stmt = session.execute.call_args.args[0]
+        compiled = str(update_stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "user_id" not in compiled
+        assert "tenant_id" in compiled
+        assert "provider" in compiled
 
 
 class TestUpdateBuiltinToolProvider:
@@ -280,7 +298,7 @@ class TestGetOauthClient:
 
         assert result == {"client_id": "id", "client_secret": "secret"}
 
-    @patch(f"{MODULE}.decrypt_system_oauth_params", return_value={"sys_key": "sys_val"})
+    @patch(f"{MODULE}.decrypt_system_params", return_value={"sys_key": "sys_val"})
     @patch(f"{MODULE}.PluginService")
     @patch(f"{MODULE}.create_provider_encrypter")
     @patch(f"{MODULE}.ToolManager")
@@ -336,7 +354,7 @@ class TestGetBuiltinToolProviderCredentialInfo:
     def test_returns_credential_info(self, mock_tm, mock_creds, mock_oauth):
         mock_tm.get_builtin_provider.return_value.get_supported_credential_types.return_value = ["api-key"]
 
-        result = BuiltinToolManageService.get_builtin_tool_provider_credential_info("t", "google")
+        result = BuiltinToolManageService.get_builtin_tool_provider_credential_info("t", "google", session=MagicMock())
 
         assert result.credentials == []
         assert result.supported_credential_types == ["api-key"]
@@ -350,7 +368,7 @@ class TestGetBuiltinToolProviderCredentials:
         mock_db.session.no_autoflush.__exit__ = MagicMock(return_value=False)
         mock_db.session.scalars.return_value.all.return_value = []
 
-        result = BuiltinToolManageService.get_builtin_tool_provider_credentials("t", "google")
+        result = BuiltinToolManageService.get_builtin_tool_provider_credentials("t", "google", session=mock_db.session)
 
         assert result == []
 
@@ -373,7 +391,7 @@ class TestGetBuiltinToolProviderCredentials:
         credential_entity = MagicMock()
         mock_transform.convert_builtin_provider_to_credential_entity.return_value = credential_entity
 
-        result = BuiltinToolManageService.get_builtin_tool_provider_credentials("t", "google")
+        result = BuiltinToolManageService.get_builtin_tool_provider_credentials("t", "google", session=mock_db.session)
 
         assert len(result) == 1
         assert result[0] is credential_entity

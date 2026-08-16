@@ -7,7 +7,7 @@ import core.rag.extractor.pdf_extractor as pe
 
 
 @pytest.fixture
-def mock_dependencies(monkeypatch):
+def mock_dependencies(monkeypatch: pytest.MonkeyPatch):
     # Mock storage
     saves = []
 
@@ -61,7 +61,16 @@ def mock_dependencies(monkeypatch):
         (b"\x89PNG\r\n\x1a\n some png", "image/png", "png", "test_file_id_png"),
     ],
 )
-def test_extract_images_formats(mock_dependencies, monkeypatch, image_bytes, expected_mime, expected_ext, file_id):
+@pytest.mark.parametrize("inject_session", [False, True])
+def test_extract_images_formats(
+    mock_dependencies,
+    monkeypatch: pytest.MonkeyPatch,
+    image_bytes,
+    expected_mime,
+    expected_ext,
+    file_id,
+    inject_session: bool,
+):
     saves = mock_dependencies.saves
     db_stub = mock_dependencies.db
 
@@ -80,7 +89,12 @@ def test_extract_images_formats(mock_dependencies, monkeypatch, image_bytes, exp
 
     mock_page.get_objects.return_value = [mock_image_obj]
 
-    extractor = pe.PdfExtractor(file_path="test.pdf", tenant_id="t1", user_id="u1")
+    extractor = pe.PdfExtractor(
+        file_path="test.pdf",
+        tenant_id="t1",
+        user_id="u1",
+        session=db_stub.session if inject_session else None,
+    )
 
     # We need to handle the import inside _extract_images
     with patch("pypdfium2.raw", autospec=True) as mock_raw:
@@ -95,7 +109,7 @@ def test_extract_images_formats(mock_dependencies, monkeypatch, image_bytes, exp
     assert db_stub.session.added[0].size == len(image_bytes)
     assert db_stub.session.added[0].mime_type == expected_mime
     assert db_stub.session.added[0].extension == expected_ext
-    assert db_stub.session.committed is True
+    assert db_stub.session.committed is not inject_session
 
 
 @pytest.mark.parametrize(
@@ -122,7 +136,7 @@ def test_extract_images_get_objects_scenarios(mock_dependencies, get_objects_sid
     assert result == ""
 
 
-def test_extract_calls_extract_images(mock_dependencies, monkeypatch):
+def test_extract_calls_extract_images(mock_dependencies, monkeypatch: pytest.MonkeyPatch):
     # Mock pypdfium2
     mock_pdf_doc = MagicMock()
     mock_page = MagicMock()

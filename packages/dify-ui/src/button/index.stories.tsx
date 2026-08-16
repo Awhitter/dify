@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-
-import { Button } from '.'
+import * as React from 'react'
+import { expect, fn } from 'storybook/test'
+import { Button, buttonVariants } from '.'
 
 const meta = {
   title: 'Base/UI/Button',
@@ -11,6 +12,7 @@ const meta = {
   tags: ['autodocs'],
   argTypes: {
     loading: { control: 'boolean' },
+    focusableWhenDisabled: { control: 'boolean' },
     tone: {
       control: 'select',
       options: ['default', 'destructive'],
@@ -88,7 +90,28 @@ export const Loading: Story = {
   args: {
     variant: 'primary',
     loading: true,
+    onClick: fn(),
     children: 'Loading Button',
+  },
+  play: async ({ args, canvas, userEvent }) => {
+    const button = canvas.getByRole('button', { name: 'Loading Button' })
+
+    await expect(button).toHaveAttribute('aria-disabled', 'true')
+    await expect(button).not.toHaveAttribute('aria-busy')
+
+    button.focus()
+    await expect(button).toHaveFocus()
+
+    await userEvent.click(button)
+    await expect(args.onClick).not.toHaveBeenCalled()
+  },
+  parameters: {
+    docs: {
+      description: {
+        story:
+          'Loading buttons remain focusable by default so focus is not lost after activation. Pass `focusableWhenDisabled={false}` to opt out.',
+      },
+    },
   },
 }
 
@@ -104,10 +127,10 @@ export const WithIcon: Story = {
   args: {
     variant: 'primary',
     children: (
-      <>
-        <span className="mr-1.5 i-heroicons-rocket-launch-20-solid h-4 w-4" />
+      <React.Fragment>
+        <span aria-hidden className="mr-1.5 i-ri-rocket-line size-4 shrink-0" />
         Launch
-      </>
+      </React.Fragment>
     ),
   },
 }
@@ -128,10 +151,24 @@ export const LargeSize: Story = {
   },
 }
 
-export const AsLink: Story = {
-  args: {
-    variant: 'ghost-accent',
-    render: <a href="https://example.com" />,
-    children: 'Link Button',
+export const StyledLink: Story = {
+  render: () => (
+    <a className={buttonVariants({ variant: 'ghost-accent' })} href="https://example.com">
+      Link styled as a button
+    </a>
+  ),
+  play: async ({ canvas }) => {
+    await expect(canvas.getByRole('link', { name: 'Link styled as a button' })).toHaveAttribute(
+      'href',
+      'https://example.com',
+    )
+  },
+  parameters: {
+    docs: {
+      description: {
+        story:
+          'Rendering an anchor through `Button` is an anti-pattern because Base UI enforces button semantics. Keep the native link and apply `buttonVariants` directly when a link needs button styling. See the [Base UI Button usage guidelines](https://base-ui.com/react/components/button#rendering-links-as-buttons).',
+      },
+    },
   },
 }

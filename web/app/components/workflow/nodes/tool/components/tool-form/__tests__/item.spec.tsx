@@ -34,24 +34,31 @@ vi.mock('@/app/components/header/account-setting/model-provider-page/hooks', () 
   useLanguage: () => mockUseLanguage(),
 }))
 
-vi.mock('@/app/components/plugins/plugin-detail-panel/tool-selector/components', () => ({
-  SchemaModal: (props: MockSchemaModalProps) => {
-    mockSchemaModal(props)
-    return props.isShow
-      ? (
-          <div data-testid="schema-modal">
-            <span>{props.rootName}</span>
-            <button type="button" onClick={props.onClose}>close-schema</button>
-          </div>
-        )
-      : null
-  },
-}))
+vi.mock(
+  '@/app/components/plugins/plugin-detail-panel/tool-selector/components/schema-modal',
+  () => ({
+    SchemaModal: (props: MockSchemaModalProps) => {
+      mockSchemaModal(props)
+      return props.isShow ? (
+        <div data-testid="schema-modal">
+          <span>{props.rootName}</span>
+          <button type="button" onClick={props.onClose}>
+            close-schema
+          </button>
+        </div>
+      ) : null
+    },
+  }),
+)
 
 vi.mock('@/app/components/workflow/nodes/_base/components/form-input-item', () => ({
   default: (props: MockFormInputItemProps) => {
     mockFormInputItem(props)
-    return <div data-testid="form-input-item" data-provider-type={props.providerType}>{props.schema.variable}</div>
+    return (
+      <div data-testid="form-input-item" data-provider-type={props.providerType}>
+        {props.schema.variable}
+      </div>
+    )
   },
 }))
 
@@ -171,7 +178,7 @@ describe('tool/tool-form/item', () => {
       } as unknown as SchemaRoot,
     })
 
-    const { container } = render(
+    render(
       <ToolFormItem
         readOnly={false}
         nodeId="tool-node"
@@ -182,7 +189,8 @@ describe('tool/tool-form/item', () => {
       />,
     )
 
-    fireEvent.mouseEnter(container.querySelector('svg')?.parentElement as HTMLElement)
+    const infotipTrigger = screen.getByRole('button', { name: 'Select from tools' })
+    fireEvent.click(infotipTrigger)
     expect(screen.getByText('Select from tools'))!.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'JSON Schema' }))

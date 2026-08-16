@@ -9,7 +9,9 @@ import { Theme } from '@/types/app'
 import { formatFileSize, getFileExtension } from '@/utils/format'
 import { PROGRESS_COMPLETE, PROGRESS_ERROR } from '../constants'
 
-const SimplePieChart = dynamic(() => import('@/app/components/base/simple-pie-chart'), { ssr: false })
+const SimplePieChart = dynamic(() => import('@/app/components/base/simple-pie-chart'), {
+  ssr: false,
+})
 
 export type FileListItemProps = {
   fileItem: FileItem
@@ -17,20 +19,15 @@ export type FileListItemProps = {
   onRemove: (fileID: string) => void
 }
 
-const FileListItem = ({
-  fileItem,
-  onPreview,
-  onRemove,
-}: FileListItemProps) => {
+const FileListItem = ({ fileItem, onPreview, onRemove }: FileListItemProps) => {
   const { theme } = useTheme()
-  const chartColor = useMemo(() => theme === Theme.dark ? '#5289ff' : '#296dff', [theme])
+  const chartColor = useMemo(() => (theme === Theme.dark ? '#5289ff' : '#296dff'), [theme])
 
   const isUploading = fileItem.progress >= 0 && fileItem.progress < PROGRESS_COMPLETE
   const isError = fileItem.progress === PROGRESS_ERROR
 
   const handleClick = () => {
-    if (fileItem.file?.id)
-      onPreview(fileItem.file)
+    if (fileItem.file?.id) onPreview(fileItem.file)
   }
 
   const handleRemove = (e: React.MouseEvent) => {
@@ -53,7 +50,7 @@ const FileListItem = ({
       </div>
       <div className="flex shrink grow flex-col gap-0.5">
         <div className="flex w-full">
-          <div className="w-0 grow truncate text-sm leading-4 text-text-secondary">
+          <div className="w-0 grow truncate text-sm/4 text-text-secondary">
             {fileItem.file.name}
           </div>
         </div>
@@ -72,11 +69,9 @@ const FileListItem = ({
             animationDuration={0}
           />
         )}
-        {isError && (
-          <RiErrorWarningFill className="size-4 text-text-destructive" />
-        )}
+        {isError && <RiErrorWarningFill className="size-4 text-text-destructive" />}
         <span
-          className="flex h-6 w-6 cursor-pointer items-center justify-center"
+          className="flex size-6 cursor-pointer items-center justify-center"
           onClick={handleRemove}
         >
           <RiDeleteBinLine className="size-4 text-text-tertiary" />

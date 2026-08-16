@@ -9,52 +9,81 @@ const mockToSvg = vi.fn()
 const mockDownloadUrl = vi.fn()
 const mockSetViewport = vi.fn()
 const mockGetNodesReadOnly = vi.fn()
-const {
-  mockAppStoreState,
-  mockWorkflowState,
-} = vi.hoisted(() => ({
-  mockAppStoreState: {
-    appSidebarExpand: 'collapse',
-  },
+const { mockDropdownContentProps, mockWorkflowState } = vi.hoisted(() => ({
+  mockDropdownContentProps: vi.fn(),
   mockWorkflowState: {
     knowledgeName: '',
     appName: 'Demo App',
-    maximizeCanvas: false,
   },
 }))
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: { ns?: string }) => options?.ns ? `${options.ns}.${key}` : key,
-  }),
-}))
-
 vi.mock('@langgenius/dify-ui/dropdown-menu', async () => {
   const React = await import('react')
-  const DropdownMenuContext = React.createContext<{ open: boolean, setOpen: (open: boolean) => void } | null>(null)
+  const DropdownMenuContext = React.createContext<{
+    open: boolean
+    setOpen: (open: boolean) => void
+  } | null>(null)
 
   const useDropdownMenuContext = () => {
     const context = React.use(DropdownMenuContext)
-    if (!context)
-      throw new Error('DropdownMenu components must be wrapped in DropdownMenu')
+    if (!context) throw new Error('DropdownMenu components must be wrapped in DropdownMenu')
     return context
   }
 
   return {
-    DropdownMenu: ({ children, open, onOpenChange }: { children: React.ReactNode, open: boolean, onOpenChange?: (open: boolean) => void }) => (
+    DropdownMenu: ({
+      children,
+      open,
+      onOpenChange,
+    }: {
+      children: React.ReactNode
+      open: boolean
+      onOpenChange?: (open: boolean) => void
+    }) => (
       <DropdownMenuContext value={{ open, setOpen: onOpenChange ?? vi.fn() }}>
         <div>{children}</div>
       </DropdownMenuContext>
     ),
-    DropdownMenuTrigger: ({ children, className }: { children: React.ReactNode, className?: string }) => {
+    DropdownMenuTrigger: ({
+      children,
+      render,
+      className,
+    }: {
+      children: React.ReactNode
+      render?: React.ReactElement<{
+        className?: string
+        disabled?: boolean
+        onClick?: React.MouseEventHandler<HTMLButtonElement>
+      }>
+      className?: string
+    }) => {
       const { open, setOpen } = useDropdownMenuContext()
+      if (render) {
+        return React.cloneElement(
+          render,
+          {
+            className,
+            onClick: () => setOpen(!open),
+          },
+          children,
+        )
+      }
       return (
         <button type="button" className={className} onClick={() => setOpen(!open)}>
           {children}
         </button>
       )
     },
-    DropdownMenuContent: ({ children }: { children: React.ReactNode }) => {
+    DropdownMenuContent: ({
+      children,
+      ...positioningProps
+    }: {
+      children: React.ReactNode
+      placement?: string
+      sideOffset?: number
+      alignOffset?: number
+      popupClassName?: string
+    }) => {
+      mockDropdownContentProps(positioningProps)
       const { open } = useDropdownMenuContext()
       return open ? <div>{children}</div> : null
     },
@@ -81,7 +110,9 @@ vi.mock('@langgenius/dify-ui/dropdown-menu', async () => {
         </button>
       )
     },
-    DropdownMenuSeparator: ({ className }: { className?: string }) => <div className={className} data-testid="dropdown-separator" />,
+    DropdownMenuSeparator: ({ className }: { className?: string }) => (
+      <div className={className} data-testid="dropdown-separator" />
+    ),
   }
 })
 
@@ -100,19 +131,20 @@ vi.mock('reactflow', () => ({
   }),
 }))
 
-vi.mock('@/app/components/app/store', () => ({
-  useStore: (selector: (state: typeof mockAppStoreState) => unknown) => selector(mockAppStoreState),
-}))
-
 vi.mock('@/app/components/workflow/store', () => ({
   useStore: (selector: (state: typeof mockWorkflowState) => unknown) => selector(mockWorkflowState),
 }))
 
-vi.mock('@/app/components/workflow/hooks', () => ({
-  useNodesReadOnly: () => ({
-    getNodesReadOnly: mockGetNodesReadOnly,
-  }),
-}))
+vi.mock('../../hooks/use-workflow', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../hooks/use-workflow')>()
+
+  return {
+    ...actual,
+    useNodesReadOnly: () => ({
+      getNodesReadOnly: mockGetNodesReadOnly,
+    }),
+  }
+})
 
 vi.mock('@/utils/download', () => ({
   downloadUrl: (...args: unknown[]) => mockDownloadUrl(...args),
@@ -123,10 +155,12 @@ vi.mock('../tip-popup', () => ({
 }))
 
 vi.mock('@/app/components/base/image-uploader/image-preview', () => ({
-  default: ({ title, onCancel }: { title: string, onCancel: () => void }) => (
+  default: ({ title, onCancel }: { title: string; onCancel: () => void }) => (
     <div data-testid="image-preview">
       <span>{title}</span>
-      <button type="button" onClick={onCancel}>close-preview</button>
+      <button type="button" onClick={onCancel}>
+        close-preview
+      </button>
     </div>
   ),
 }))
@@ -139,15 +173,22 @@ describe('MoreActions', () => {
     mockToPng.mockResolvedValue('data:image/png;base64,current')
     mockToJpeg.mockResolvedValue('data:image/jpeg;base64,current')
     mockToSvg.mockResolvedValue('data:image/svg+xml;base64,current')
-    mockAppStoreState.appSidebarExpand = 'collapse'
     mockWorkflowState.knowledgeName = ''
     mockWorkflowState.appName = 'Demo App'
-    mockWorkflowState.maximizeCanvas = false
 
     document.body.innerHTML = ''
     const viewport = document.createElement('div')
     viewport.className = 'react-flow__viewport'
     document.body.appendChild(viewport)
+  })
+
+  it('opens the menu to the right of the workflow control bar', () => {
+    render(<MoreActions />)
+
+    expect(mockDropdownContentProps).toHaveBeenCalledWith({
+      placement: 'right-end',
+      popupClassName: 'min-w-[180px]',
+    })
   })
 
   it('opens the menu and exports the current view as png', async () => {
@@ -173,7 +214,12 @@ describe('MoreActions', () => {
 
     render(<MoreActions />)
 
-    await user.click(screen.getByRole('button'))
+    const trigger = screen.getByRole('button', { name: 'workflow.common.moreActions' })
+    expect(trigger).toHaveAttribute('aria-disabled', 'true')
+
+    await user.tab()
+    expect(trigger).toHaveFocus()
+    await user.keyboard('{Enter}')
 
     expect(screen.queryByText('workflow.common.exportImage')).not.toBeInTheDocument()
   })
@@ -220,9 +266,8 @@ describe('MoreActions', () => {
     })
   })
 
-  it('exports the whole workflow as svg when the canvas is maximized', async () => {
+  it('exports the whole workflow as svg', async () => {
     vi.useFakeTimers()
-    mockWorkflowState.maximizeCanvas = true
 
     render(<MoreActions />)
 

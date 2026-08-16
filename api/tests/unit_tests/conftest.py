@@ -1,9 +1,14 @@
 import os
+import shutil
+from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from flask import Flask
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL, Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 # Getting the absolute path of the current file's directory
 ABS_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -32,8 +37,10 @@ os.environ.setdefault("OPENDAL_SCHEME", "fs")
 os.environ.setdefault("OPENDAL_FS_ROOT", "/tmp/dify-storage")
 os.environ.setdefault("STORAGE_TYPE", "opendal")
 
-from core.db.session_factory import configure_session_factory, session_factory
+import core.db.session_factory as session_factory_module
 from extensions import ext_redis
+from models.account import Account, Tenant, TenantAccountJoin, TenantAccountRole
+from models.base import TypeBase
 
 
 def _patch_redis_clients_on_loaded_modules():
@@ -106,48 +113,111 @@ def reset_secret_key():
         dify_config.SECRET_KEY = original
 
 
+@pytest.fixture
+def _sqlite_engine(_sqlite_database_template: Path, tmp_path: Path) -> Iterator[Engine]:
+    """Create an engine over a pristine per-test copy of the SQLite schema."""
+
+    database_path = tmp_path / "unit-tests.sqlite3"
+    shutil.copyfile(_sqlite_database_template, database_path)
+    engine = create_engine(URL.create("sqlite", database=str(database_path)))
+
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        database_path.unlink(missing_ok=True)
+
+
 @pytest.fixture(scope="session")
-def _unit_test_engine():
-    engine = create_engine("sqlite:///:memory:")
-    yield engine
-    engine.dispose()
+def _sqlite_database_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Create one empty full-schema SQLite database per pytest worker."""
+
+    database_path = tmp_path_factory.mktemp("sqlite-template") / "unit-tests.sqlite3"
+    engine = create_engine(URL.create("sqlite", database=str(database_path)))
+    try:
+        TypeBase.metadata.create_all(engine)
+    finally:
+        engine.dispose()
+    return database_path
 
 
 @pytest.fixture(autouse=True)
-def _configure_session_factory(_unit_test_engine):
-    try:
-        session_factory.get_session_maker()
-    except RuntimeError:
-        configure_session_factory(_unit_test_engine, expire_on_commit=False)
+def _sqlite_session_factory(
+    _sqlite_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> sessionmaker[Session]:
+    """Bind all unit-test Sessions to the pristine full-schema SQLite database."""
+
+    factory = sessionmaker(bind=_sqlite_engine, expire_on_commit=False)
+    monkeypatch.setattr(session_factory_module, "_session_maker", factory)
+    return factory
 
 
-def setup_mock_tenant_account_query(mock_db, mock_tenant, mock_account):
+@pytest.fixture
+def sqlite_engine(_sqlite_engine: Engine) -> Engine:
+    """Expose the pristine full-schema SQLite engine to tests."""
+
+    return _sqlite_engine
+
+
+@pytest.fixture
+def sqlite_session_factory(_sqlite_session_factory: sessionmaker[Session]) -> sessionmaker[Session]:
+    """Expose the shared SQLite session factory to tests."""
+
+    return _sqlite_session_factory
+
+
+@pytest.fixture
+def sqlite_session(_sqlite_session_factory: sessionmaker[Session]) -> Iterator[Session]:
+    """Yield a session over the pristine full-schema SQLite database.
+
+    Legacy indirect model parameters remain accepted by pytest but are ignored.
+    Remove those decorators as their test files receive individual review.
     """
-    Helper to set up the mock DB execute chain for tenant/account authentication.
 
-    This configures the mock to return (tenant, account) for the
-    db.session.execute(select(...).join().join().where()).one_or_none()
-    query used by validate_app_token decorator.
+    with _sqlite_session_factory() as session:
+        yield session
 
-    Args:
-        mock_db: The mocked db object
-        mock_tenant: Mock tenant object to return
-        mock_account: Mock account object to return
+
+def persist_service_api_tenant_owner(session: Session, tenant: Tenant, owner: Account) -> TenantAccountJoin:
+    """Persist the owner identity resolved by service-API app authentication.
+
+    The legacy name is retained temporarily for consumers on independent
+    conversion branches, but this helper no longer fabricates an execute result.
     """
-    mock_db.session.execute.return_value.one_or_none.return_value = (mock_tenant, mock_account)
+    membership = TenantAccountJoin(
+        tenant_id=tenant.id,
+        account_id=owner.id,
+        role=TenantAccountRole.OWNER,
+    )
+    owner._current_tenant = tenant
+    session.add_all([tenant, owner, membership])
+    session.commit()
+    return membership
 
 
-def setup_mock_dataset_tenant_query(mock_db, mock_tenant, mock_ta):
-    """
-    Helper to set up the mock DB execute chain for dataset tenant authentication.
+def persist_service_api_dataset_owner(
+    session: Session,
+    tenant: Tenant,
+    tenant_account_join: TenantAccountJoin,
+) -> None:
+    """Persist the tenant-owner mapping resolved by dataset-token authentication."""
+    session.add_all([tenant, tenant_account_join])
+    session.commit()
 
-    This configures the mock to return (tenant, tenant_account) for the
-    db.session.execute(select(...).where().where().where().where()).one_or_none()
-    query used by validate_dataset_token decorator.
 
-    Args:
-        mock_db: The mocked db object
-        mock_tenant: Mock tenant object to return
-        mock_ta: Mock tenant account object to return
-    """
-    mock_db.session.execute.return_value.one_or_none.return_value = (mock_tenant, mock_ta)
+def setup_mock_tenant_owner_execute_result(mock_db: MagicMock, mock_tenant: object, mock_owner: object) -> None:
+    """Stub the legacy owner query; SQLite-backed tests use ``persist_service_api_tenant_owner``."""
+    mock_db.session.execute.return_value.one_or_none.return_value = (mock_tenant, mock_owner)
+
+
+def setup_mock_dataset_owner_execute_result(
+    mock_db: MagicMock,
+    mock_tenant: object,
+    mock_tenant_account_join: object,
+) -> None:
+    """Stub the legacy dataset-owner query; SQLite tests use ``persist_service_api_dataset_owner``."""
+    mock_db.session.execute.return_value.one_or_none.return_value = (
+        mock_tenant,
+        mock_tenant_account_join,
+    )

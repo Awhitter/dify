@@ -5,7 +5,8 @@ import { VersionHistoryContextMenuOptions, WorkflowVersion } from '../../../type
 import VersionHistoryItem from '../version-history-item'
 
 vi.mock('@/app/components/workflow/store', () => ({
-  useStore: (selector: (state: { pipelineId?: string }) => unknown) => selector({ pipelineId: undefined }),
+  useStore: (selector: (state: { pipelineId?: string }) => unknown) =>
+    selector({ pipelineId: undefined }),
 }))
 
 const createVersionHistory = (overrides: Partial<VersionHistory> = {}): VersionHistory => ({
@@ -60,7 +61,8 @@ describe('VersionHistoryItem', () => {
           currentVersion={null}
           latestVersionId="latest-version"
           onClick={onClick}
-          handleClickMenuItem={vi.fn()}
+          handleClickActionMenuItem={vi.fn()}
+          canImportExportDSL
           isLast={false}
         />,
       )
@@ -68,9 +70,11 @@ describe('VersionHistoryItem', () => {
       expect(screen.getByText('workflow.versionHistory.currentDraft')).toBeInTheDocument()
 
       await waitFor(() => {
-        expect(onClick).toHaveBeenCalledWith(expect.objectContaining({
-          version: WorkflowVersion.Draft,
-        }))
+        expect(onClick).toHaveBeenCalledWith(
+          expect.objectContaining({
+            version: WorkflowVersion.Draft,
+          }),
+        )
       })
 
       expect(screen.queryByText('Initial release')).not.toBeInTheDocument()
@@ -81,7 +85,7 @@ describe('VersionHistoryItem', () => {
   describe('Published Items', () => {
     it('should open the context menu for a latest named version and forward restore', async () => {
       const user = userEvent.setup()
-      const handleClickMenuItem = vi.fn()
+      const handleClickActionMenuItem = vi.fn()
       const onClick = vi.fn()
 
       render(
@@ -90,15 +94,15 @@ describe('VersionHistoryItem', () => {
           currentVersion={null}
           latestVersionId="version-1"
           onClick={onClick}
-          handleClickMenuItem={handleClickMenuItem}
+          handleClickActionMenuItem={handleClickActionMenuItem}
+          canImportExportDSL
           isLast={false}
         />,
       )
 
       const title = screen.getByText('Release 1')
       const itemContainer = title.closest('.group')
-      if (!itemContainer)
-        throw new Error('Expected version history item container')
+      if (!itemContainer) throw new Error('Expected version history item container')
 
       fireEvent.mouseEnter(itemContainer)
 
@@ -115,16 +119,43 @@ describe('VersionHistoryItem', () => {
       expect(screen.queryByText('common.operation.delete')).not.toBeInTheDocument()
 
       const restoreItem = screen.getByText('workflow.common.restore').closest('.cursor-pointer')
-      if (!restoreItem)
-        throw new Error('Expected restore menu item')
+      if (!restoreItem) throw new Error('Expected restore menu item')
 
       fireEvent.click(restoreItem)
 
-      expect(handleClickMenuItem).toHaveBeenCalledTimes(1)
-      expect(handleClickMenuItem).toHaveBeenCalledWith(
+      expect(handleClickActionMenuItem).toHaveBeenCalledTimes(1)
+      expect(handleClickActionMenuItem).toHaveBeenCalledWith(
         VersionHistoryContextMenuOptions.restore,
         VersionHistoryContextMenuOptions.restore,
       )
+    })
+
+    it('should hide export from the context menu when import/export DSL permission is missing', async () => {
+      const user = userEvent.setup()
+
+      render(
+        <VersionHistoryItem
+          item={createVersionHistory()}
+          currentVersion={null}
+          latestVersionId="version-1"
+          onClick={vi.fn()}
+          handleClickActionMenuItem={vi.fn()}
+          canImportExportDSL={false}
+          isLast={false}
+        />,
+      )
+
+      const title = screen.getByText('Release 1')
+      const itemContainer = title.closest('.group')
+      if (!itemContainer) throw new Error('Expected version history item container')
+
+      fireEvent.mouseEnter(itemContainer)
+
+      const triggerButton = await screen.findByRole('button')
+      await user.click(triggerButton)
+
+      expect(screen.queryByText('app.export')).not.toBeInTheDocument()
+      expect(screen.getByText('workflow.versionHistory.copyId')).toBeInTheDocument()
     })
 
     it('should ignore clicks when the item is already selected', async () => {
@@ -138,7 +169,8 @@ describe('VersionHistoryItem', () => {
           currentVersion={item}
           latestVersionId="other-version"
           onClick={onClick}
-          handleClickMenuItem={vi.fn()}
+          handleClickActionMenuItem={vi.fn()}
+          canImportExportDSL
           isLast
         />,
       )

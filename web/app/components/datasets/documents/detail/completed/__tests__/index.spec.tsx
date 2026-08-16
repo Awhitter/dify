@@ -1,5 +1,10 @@
 import type { DocumentContextValue } from '@/app/components/datasets/documents/detail/context'
-import type { ChildChunkDetail, ChunkingMode, ParentMode, SegmentDetailModel } from '@/models/datasets'
+import type {
+  ChildChunkDetail,
+  ChunkingMode,
+  ParentMode,
+  SegmentDetailModel,
+} from '@/models/datasets'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import * as React from 'react'
@@ -106,12 +111,9 @@ vi.mock('@/service/knowledge/use-segment', () => ({
 vi.mock('@/service/use-base', () => ({
   useInvalid: (key: unknown[]) => {
     const keyStr = JSON.stringify(key)
-    if (keyStr.includes('"enabled":"all"'))
-      return mockInvalidChunkListAll
-    if (keyStr.includes('"enabled":true'))
-      return mockInvalidChunkListEnabled
-    if (keyStr.includes('"enabled":false'))
-      return mockInvalidChunkListDisabled
+    if (keyStr.includes('"enabled":"all"')) return mockInvalidChunkListAll
+    if (keyStr.includes('"enabled":true')) return mockInvalidChunkListEnabled
+    if (keyStr.includes('"enabled":false')) return mockInvalidChunkListDisabled
     return vi.fn()
   },
 }))
@@ -137,43 +139,87 @@ vi.mock('../hooks/use-child-segment-data', () => ({
   },
 }))
 
-// Mock child components to simplify testing
-vi.mock('../components', () => ({
-  MenuBar: ({ totalText, onInputChange, inputValue, isLoading, onSelectedAll, onChangeStatus }: {
-    totalText: string
-    onInputChange: (value: string) => void
-    inputValue: string
-    isLoading: boolean
-    onSelectedAll?: () => void
-    onChangeStatus?: (item: { value: string | number, name: string }) => void
-  }) => (
-    <div data-testid="menu-bar">
-      <span data-testid="total-text">{totalText}</span>
-      <input
-        data-testid="search-input"
-        value={inputValue}
-        onChange={e => onInputChange(e.target.value)}
-        disabled={isLoading}
-      />
-      {onSelectedAll && (
-        <button data-testid="select-all-button" onClick={onSelectedAll}>Select All</button>
-      )}
-      {onChangeStatus && (
-        <>
-          <button data-testid="status-enabled" onClick={() => onChangeStatus({ value: 1, name: 'Enabled' })}>Enabled</button>
-          <button data-testid="status-disabled" onClick={() => onChangeStatus({ value: 0, name: 'Disabled' })}>Disabled</button>
-          <button data-testid="status-all" onClick={() => onChangeStatus({ value: 'all', name: 'All' })}>All</button>
-        </>
-      )}
-    </div>
-  ),
+vi.mock('../components/menu-bar', async () => {
+  const { Checkbox } = await import('@langgenius/dify-ui/checkbox')
+
+  return {
+    default: ({
+      hasSelectableSegments,
+      totalText,
+      onInputChange,
+      inputValue,
+      isLoading,
+      onChangeStatus,
+    }: {
+      hasSelectableSegments: boolean
+      totalText: string
+      onInputChange: (value: string) => void
+      inputValue: string
+      isLoading: boolean
+      onChangeStatus?: (item: { value: string | number; name: string }) => void
+    }) => (
+      <div data-testid="menu-bar">
+        <span data-testid="total-text">{totalText}</span>
+        <input
+          data-testid="search-input"
+          value={inputValue}
+          onChange={(e) => onInputChange(e.target.value)}
+          disabled={isLoading}
+        />
+        {hasSelectableSegments ? (
+          <Checkbox
+            parent
+            data-testid="select-all-button"
+            aria-label="Select All"
+            disabled={isLoading}
+          />
+        ) : (
+          <span data-testid="select-all-spacer" aria-hidden />
+        )}
+        {onChangeStatus && (
+          <>
+            <button
+              data-testid="status-enabled"
+              onClick={() => onChangeStatus({ value: 1, name: 'Enabled' })}
+            >
+              Enabled
+            </button>
+            <button
+              data-testid="status-disabled"
+              onClick={() => onChangeStatus({ value: 0, name: 'Disabled' })}
+            >
+              Disabled
+            </button>
+            <button
+              data-testid="status-all"
+              onClick={() => onChangeStatus({ value: 'all', name: 'All' })}
+            >
+              All
+            </button>
+          </>
+        )}
+      </div>
+    ),
+  }
+})
+
+vi.mock('../components/drawer-group', () => ({
   DrawerGroup: () => <div data-testid="drawer-group" />,
+}))
+
+vi.mock('../components/segment-list-content', () => ({
   FullDocModeContent: () => <div data-testid="full-doc-mode-content" />,
   GeneralModeContent: () => <div data-testid="general-mode-content" />,
 }))
 
 vi.mock('../common/batch-action', () => ({
-  default: ({ selectedIds, onCancel, onBatchEnable, onBatchDisable, onBatchDelete }: {
+  default: ({
+    selectedIds,
+    onCancel,
+    onBatchEnable,
+    onBatchDisable,
+    onBatchDelete,
+  }: {
     selectedIds: string[]
     onCancel: () => void
     onBatchEnable: () => void
@@ -182,10 +228,18 @@ vi.mock('../common/batch-action', () => ({
   }) => (
     <div data-testid="batch-action">
       <span data-testid="selected-count">{selectedIds.length}</span>
-      <button data-testid="cancel-batch" onClick={onCancel}>Cancel</button>
-      <button data-testid="batch-enable" onClick={onBatchEnable}>Enable</button>
-      <button data-testid="batch-disable" onClick={onBatchDisable}>Disable</button>
-      <button data-testid="batch-delete" onClick={onBatchDelete}>Delete</button>
+      <button data-testid="cancel-batch" onClick={onCancel}>
+        Cancel
+      </button>
+      <button data-testid="batch-enable" onClick={onBatchEnable}>
+        Enable
+      </button>
+      <button data-testid="batch-disable" onClick={onBatchDisable}>
+        Disable
+      </button>
+      <button data-testid="batch-delete" onClick={onBatchDelete}>
+        Delete
+      </button>
     </div>
   ),
 }))
@@ -194,23 +248,38 @@ vi.mock('@/app/components/base/divider', () => ({
   default: () => <hr data-testid="divider" />,
 }))
 
-vi.mock('@/app/components/base/pagination', () => ({
-  default: ({ current, total, onChange, onLimitChange }: {
-    current: number
-    total: number
-    onChange: (page: number) => void
-    onLimitChange: (limit: number) => void
+vi.mock('@langgenius/dify-ui/pagination', () => ({
+  Pagination: ({
+    page,
+    totalPages,
+    onPageChange,
+    pageSize,
+  }: {
+    page: number
+    totalPages: number
+    onPageChange: (page: number) => void
+    pageSize?: {
+      onValueChange: (limit: number) => void
+    }
   }) => (
     <div data-testid="pagination">
-      <span data-testid="current-page">{current}</span>
-      <span data-testid="total-items">{total}</span>
-      <button data-testid="next-page" onClick={() => onChange(current + 1)}>Next</button>
-      <button data-testid="change-limit" onClick={() => onLimitChange(20)}>Change Limit</button>
+      <span data-testid="current-page">{page - 1}</span>
+      <span data-testid="total-pages">{totalPages}</span>
+      <button data-testid="next-page" onClick={() => onPageChange(page + 1)}>
+        Next
+      </button>
+      {pageSize && (
+        <button data-testid="change-limit" onClick={() => pageSize.onValueChange(20)}>
+          Change Limit
+        </button>
+      )}
     </div>
   ),
 }))
 
-const createMockSegmentDetail = (overrides: Partial<SegmentDetailModel> = {}): SegmentDetailModel => ({
+const createMockSegmentDetail = (
+  overrides: Partial<SegmentDetailModel> = {},
+): SegmentDetailModel => ({
   id: `segment-${Math.random().toString(36).substr(2, 9)}`,
   position: 1,
   document_id: 'doc-1',
@@ -250,19 +319,18 @@ const _createMockChildChunk = (overrides: Partial<ChildChunkDetail> = {}): Child
   ...overrides,
 })
 
-const createQueryClient = () => new QueryClient({
-  defaultOptions: {
-    queries: { retry: false },
-    mutations: { retry: false },
-  },
-})
+const createQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
 
 const createWrapper = () => {
   const queryClient = createQueryClient()
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
 }
 
@@ -270,10 +338,10 @@ describe('SegmentListContext', () => {
   describe('Default Values', () => {
     it('should have correct default context values', () => {
       const TestComponent = () => {
-        const isCollapsed = useSegmentListContext(s => s.isCollapsed)
-        const fullScreen = useSegmentListContext(s => s.fullScreen)
-        const currSegment = useSegmentListContext(s => s.currSegment)
-        const currChildChunk = useSegmentListContext(s => s.currChildChunk)
+        const isCollapsed = useSegmentListContext((s) => s.isCollapsed)
+        const fullScreen = useSegmentListContext((s) => s.fullScreen)
+        const currSegment = useSegmentListContext((s) => s.currSegment)
+        const currChildChunk = useSegmentListContext((s) => s.currChildChunk)
 
         return (
           <div>
@@ -305,9 +373,9 @@ describe('SegmentListContext', () => {
       }
 
       const TestComponent = () => {
-        const isCollapsed = useSegmentListContext(s => s.isCollapsed)
-        const fullScreen = useSegmentListContext(s => s.fullScreen)
-        const currSegment = useSegmentListContext(s => s.currSegment)
+        const isCollapsed = useSegmentListContext((s) => s.isCollapsed)
+        const fullScreen = useSegmentListContext((s) => s.fullScreen)
+        const currSegment = useSegmentListContext((s) => s.currSegment)
 
         return (
           <div>
@@ -333,8 +401,8 @@ describe('SegmentListContext', () => {
   describe('Selector Optimization', () => {
     it('should select specific values from context', () => {
       const TestComponent = () => {
-        const isCollapsed = useSegmentListContext(s => s.isCollapsed)
-        const fullScreen = useSegmentListContext(s => s.fullScreen)
+        const isCollapsed = useSegmentListContext((s) => s.isCollapsed)
+        const fullScreen = useSegmentListContext((s) => s.fullScreen)
         return (
           <div>
             <span data-testid="isCollapsed">{String(isCollapsed)}</span>
@@ -344,13 +412,14 @@ describe('SegmentListContext', () => {
       }
 
       const { rerender } = render(
-        <SegmentListContext.Provider value={{
-          isCollapsed: true,
-          fullScreen: false,
-          toggleFullScreen: vi.fn(),
-          currSegment: { showModal: false },
-          currChildChunk: { showModal: false },
-        }}
+        <SegmentListContext.Provider
+          value={{
+            isCollapsed: true,
+            fullScreen: false,
+            toggleFullScreen: vi.fn(),
+            currSegment: { showModal: false },
+            currChildChunk: { showModal: false },
+          }}
         >
           <TestComponent />
         </SegmentListContext.Provider>,
@@ -361,13 +430,14 @@ describe('SegmentListContext', () => {
 
       // Rerender with changed values
       rerender(
-        <SegmentListContext.Provider value={{
-          isCollapsed: false,
-          fullScreen: true,
-          toggleFullScreen: vi.fn(),
-          currSegment: { showModal: false },
-          currChildChunk: { showModal: false },
-        }}
+        <SegmentListContext.Provider
+          value={{
+            isCollapsed: false,
+            fullScreen: true,
+            toggleFullScreen: vi.fn(),
+            currSegment: { showModal: false },
+            currChildChunk: { showModal: false },
+          }}
         >
           <TestComponent />
         </SegmentListContext.Provider>,
@@ -500,13 +570,17 @@ describe('Completed Component', () => {
     })
 
     it('should handle embeddingAvailable prop', () => {
-      render(<Completed {...defaultProps} embeddingAvailable={false} />, { wrapper: createWrapper() })
+      render(<Completed {...defaultProps} embeddingAvailable={false} />, {
+        wrapper: createWrapper(),
+      })
 
       expect(screen.getByTestId('general-mode-content'))!.toBeInTheDocument()
     })
 
     it('should handle showNewSegmentModal prop', () => {
-      render(<Completed {...defaultProps} showNewSegmentModal={true} />, { wrapper: createWrapper() })
+      render(<Completed {...defaultProps} showNewSegmentModal={true} />, {
+        wrapper: createWrapper(),
+      })
 
       expect(screen.getByTestId('drawer-group'))!.toBeInTheDocument()
     })
@@ -563,7 +637,7 @@ describe('Edge Cases', () => {
     expect(screen.getByTestId('general-mode-content'))!.toBeInTheDocument()
   })
 
-  it('should handle ProcessStatus.COMPLETED importStatus', () => {
+  it('should handle completed importStatus', () => {
     render(<Completed {...defaultProps} importStatus="completed" />, { wrapper: createWrapper() })
 
     expect(screen.getByTestId('general-mode-content'))!.toBeInTheDocument()
@@ -746,6 +820,17 @@ describe('Batch Action Callbacks', () => {
     })
   })
 
+  it('should not render select all when there are no current page segments', () => {
+    mockSegmentListData.data = []
+    mockSegmentListData.total = 0
+
+    render(<Completed {...defaultProps} />, { wrapper: createWrapper() })
+
+    expect(screen.queryByTestId('select-all-button')).not.toBeInTheDocument()
+    expect(screen.getByTestId('select-all-spacer')).toBeInTheDocument()
+    expect(screen.queryByTestId('batch-action')).not.toBeInTheDocument()
+  })
+
   it('should call onChangeSwitch with true when batch enable is clicked', async () => {
     render(<Completed {...defaultProps} />, { wrapper: createWrapper() })
 
@@ -832,8 +917,7 @@ describe('refreshChunkListDataWithDetailChanged callback', () => {
     render(<Completed {...defaultProps} />, { wrapper: createWrapper() })
 
     // Call the captured callback - status is 'all' by default
-    if (capturedRefreshCallback)
-      capturedRefreshCallback()
+    if (capturedRefreshCallback) capturedRefreshCallback()
 
     // With status 'all', should call both disabled and enabled invalidation
     expect(mockInvalidChunkListDisabled).toHaveBeenCalled()
@@ -873,8 +957,7 @@ describe('refreshChunkListDataWithDetailChanged callback', () => {
     })
 
     // Call the callback with status 'true'
-    if (capturedRefreshCallback)
-      capturedRefreshCallback()
+    if (capturedRefreshCallback) capturedRefreshCallback()
 
     // With status true, should call all and disabled invalidation
     expect(mockInvalidChunkListAll).toHaveBeenCalled()
@@ -899,8 +982,7 @@ describe('refreshChunkListDataWithDetailChanged callback', () => {
     })
 
     // Call the callback with status 'false'
-    if (capturedRefreshCallback)
-      capturedRefreshCallback()
+    if (capturedRefreshCallback) capturedRefreshCallback()
 
     // With status false, should call all and enabled invalidation
     expect(mockInvalidChunkListAll).toHaveBeenCalled()
@@ -1038,10 +1120,9 @@ describe('Inline callback and hook initialization coverage', () => {
   // Covers lines 61-63: useModalState({ onNewSegmentModalChange })
   it('should pass onNewSegmentModalChange to modal state hook', () => {
     const mockOnChange = vi.fn()
-    render(
-      <Completed {...defaultProps} onNewSegmentModalChange={mockOnChange} />,
-      { wrapper: createWrapper() },
-    )
+    render(<Completed {...defaultProps} onNewSegmentModalChange={mockOnChange} />, {
+      wrapper: createWrapper(),
+    })
     expect(screen.getByTestId('drawer-group'))!.toBeInTheDocument()
   })
 
@@ -1160,15 +1241,14 @@ describe('Inline callback and hook initialization coverage', () => {
     })
   })
 
-  // Covers paginationTotal in full-doc mode
-  it('should compute pagination total from child chunk data in full-doc mode', () => {
+  it('should compute pagination pages from child chunk data in full-doc mode', () => {
     mockDocForm.current = ChunkingModeEnum.parentChild
     mockParentMode.current = 'full-doc'
     mockChildSegmentListData.total = 42
 
     render(<Completed {...defaultProps} />, { wrapper: createWrapper() })
 
-    expect(screen.getByTestId('total-items'))!.toHaveTextContent('42')
+    expect(screen.getByTestId('total-pages'))!.toHaveTextContent('5')
   })
 
   // Covers search input change

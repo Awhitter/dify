@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 from werkzeug.exceptions import BadRequest
 
 from models.model import OAuthProviderApp
@@ -25,7 +26,7 @@ from services.oauth_server import (
 class TestOAuthServerServiceGetProviderApp:
     """DB-backed tests for get_oauth_provider_app."""
 
-    def _create_oauth_provider_app(self, db_session_with_containers, *, client_id: str) -> OAuthProviderApp:
+    def _create_oauth_provider_app(self, db_session_with_containers: Session, *, client_id: str) -> OAuthProviderApp:
         app = OAuthProviderApp(
             app_icon="icon.png",
             client_id=client_id,
@@ -38,7 +39,7 @@ class TestOAuthServerServiceGetProviderApp:
         db_session_with_containers.commit()
         return app
 
-    def test_get_oauth_provider_app_returns_app_when_exists(self, db_session_with_containers):
+    def test_get_oauth_provider_app_returns_app_when_exists(self, db_session_with_containers: Session):
         client_id = f"client-{uuid4()}"
         created = self._create_oauth_provider_app(db_session_with_containers, client_id=client_id)
 
@@ -48,7 +49,7 @@ class TestOAuthServerServiceGetProviderApp:
         assert result.client_id == client_id
         assert result.id == created.id
 
-    def test_get_oauth_provider_app_returns_none_when_not_exists(self, db_session_with_containers):
+    def test_get_oauth_provider_app_returns_none_when_not_exists(self, db_session_with_containers: Session):
         result = OAuthServerService.get_oauth_provider_app(f"nonexistent-{uuid4()}")
 
         assert result is None
@@ -156,19 +157,22 @@ class TestOAuthServerServiceTokenOperations:
             ex=OAUTH_REFRESH_TOKEN_EXPIRES_IN,
         )
 
-    def test_validate_access_token_returns_none_when_not_found(self, mock_redis):
+    def test_validate_access_token_returns_none_when_not_found(self, mock_redis, db_session_with_containers: Session):
         mock_redis.get.return_value = None
+        session = MagicMock()
 
-        result = OAuthServerService.validate_oauth_access_token("client-1", "missing-token")
+        result = OAuthServerService.validate_oauth_access_token("client-1", "missing-token", db_session_with_containers)
 
         assert result is None
 
-    def test_validate_access_token_loads_user_when_exists(self, mock_redis):
+    def test_validate_access_token_loads_user_when_exists(self, mock_redis, db_session_with_containers: Session):
         mock_redis.get.return_value = b"user-88"
         expected_user = MagicMock()
 
         with patch("services.oauth_server.AccountService.load_user", return_value=expected_user) as mock_load:
-            result = OAuthServerService.validate_oauth_access_token("client-1", "access-token")
+            result = OAuthServerService.validate_oauth_access_token(
+                "client-1", "access-token", db_session_with_containers
+            )
 
         assert result is expected_user
-        mock_load.assert_called_once_with("user-88")
+        mock_load.assert_called_once_with("user-88", db_session_with_containers)

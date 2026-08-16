@@ -1,8 +1,52 @@
 import type { TriggerSubscription } from '@/app/components/workflow/block-selector/types'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { TriggerCredentialTypeEnum } from '@/app/components/workflow/block-selector/types'
+import { TriggerCredentialType } from '@/app/components/workflow/block-selector/types'
 import { SubscriptionSelectorEntry } from '../selector-entry'
+
+vi.mock('@langgenius/dify-ui/popover', async () => {
+  const React = await import('react')
+  const PopoverContext = React.createContext({
+    open: false,
+    setOpen: (_open: boolean) => {},
+  })
+
+  const Popover = ({
+    children,
+    open: controlledOpen,
+    onOpenChange,
+  }: {
+    children: React.ReactNode
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
+  }) => {
+    const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false)
+    const isControlled = controlledOpen !== undefined
+    const open = isControlled ? !!controlledOpen : uncontrolledOpen
+    const setOpen = (nextOpen: boolean) => {
+      if (!isControlled) setUncontrolledOpen(nextOpen)
+      onOpenChange?.(nextOpen)
+    }
+
+    return <PopoverContext.Provider value={{ open, setOpen }}>{children}</PopoverContext.Provider>
+  }
+
+  const PopoverTrigger = ({ render }: { render: React.ReactNode }) => {
+    const { open, setOpen } = React.useContext(PopoverContext)
+    return <div onClick={() => setOpen(!open)}>{render}</div>
+  }
+
+  const PopoverContent = ({ children }: { children: React.ReactNode }) => {
+    const { open } = React.useContext(PopoverContext)
+    return open ? <div data-testid="popover-content">{children}</div> : null
+  }
+
+  return {
+    Popover,
+    PopoverTrigger,
+    PopoverContent,
+  }
+})
 
 let mockSubscriptions: TriggerSubscription[] = []
 const mockRefetch = vi.fn()
@@ -42,7 +86,7 @@ const createSubscription = (overrides: Partial<TriggerSubscription> = {}): Trigg
   id: 'sub-1',
   name: 'Subscription One',
   provider: 'provider-1',
-  credential_type: TriggerCredentialTypeEnum.ApiKey,
+  credential_type: TriggerCredentialType.ApiKey,
   credentials: {},
   endpoint: 'https://example.com',
   parameters: {},
@@ -60,7 +104,9 @@ describe('SubscriptionSelectorEntry', () => {
   it('should render empty state label when no selection and closed', () => {
     render(<SubscriptionSelectorEntry selectedId={undefined} onSelect={vi.fn()} />)
 
-    expect(screen.getByText('pluginTrigger.subscription.noSubscriptionSelected')).toBeInTheDocument()
+    expect(
+      screen.getByText('pluginTrigger.subscription.noSubscriptionSelected'),
+    ).toBeInTheDocument()
   })
 
   it('should render placeholder when open without selection', () => {
@@ -91,7 +137,10 @@ describe('SubscriptionSelectorEntry', () => {
     fireEvent.click(screen.getByRole('button'))
     fireEvent.click(screen.getByRole('button', { name: 'Subscription One' }))
 
-    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'sub-1', name: 'Subscription One' }), expect.any(Function))
-    expect(screen.queryByText('Subscription One')).not.toBeInTheDocument()
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sub-1', name: 'Subscription One' }),
+      expect.any(Function),
+    )
+    expect(screen.queryByTestId('popover-content')).not.toBeInTheDocument()
   })
 })

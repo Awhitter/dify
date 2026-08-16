@@ -1,9 +1,10 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import type * as React from 'react'
 import type { Placement } from '../placement'
 import { Popover as BasePopover } from '@base-ui/react/popover'
 import { cn } from '../cn'
+import { floatingPopupAnimationClassName } from '../overlay-shared'
 import { parsePlacement } from '../placement'
 
 export type { Placement }
@@ -13,9 +14,10 @@ export const PopoverTrigger = BasePopover.Trigger
 export const PopoverClose = BasePopover.Close
 export const PopoverTitle = BasePopover.Title
 export const PopoverDescription = BasePopover.Description
+export const createPopoverHandle = BasePopover.createHandle
 
 type PopoverContentProps = {
-  children: ReactNode
+  children: React.ReactNode
   placement?: Placement
   sideOffset?: number
   alignOffset?: number
@@ -25,10 +27,7 @@ type PopoverContentProps = {
     BasePopover.Positioner.Props,
     'children' | 'className' | 'side' | 'align' | 'sideOffset' | 'alignOffset'
   >
-  popupProps?: Omit<
-    BasePopover.Popup.Props,
-    'children' | 'className'
-  >
+  popupProps?: Omit<BasePopover.Popup.Props, 'children' | 'className'>
 }
 
 export function PopoverContent({
@@ -50,13 +49,14 @@ export function PopoverContent({
         align={align}
         sideOffset={sideOffset}
         alignOffset={alignOffset}
-        className={cn('z-1002 outline-hidden', className)}
+        className={cn('z-50 outline-hidden', className)}
         {...positionerProps}
       >
         <BasePopover.Popup
           className={cn(
             'rounded-xl border-[0.5px] border-components-panel-border bg-components-panel-bg shadow-lg',
-            'origin-(--transform-origin) transition-[transform,scale,opacity] data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 motion-reduce:transition-none',
+            'outline-hidden focus:outline-hidden focus-visible:outline-hidden',
+            floatingPopupAnimationClassName,
             popupClassName,
           )}
           {...popupProps}

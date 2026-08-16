@@ -11,15 +11,26 @@ vi.mock('@langgenius/dify-ui/select', async (importOriginal) => {
 
   return {
     ...actual,
-    Select: ({ children, onValueChange }: { children: ReactNode, onValueChange: (value: string | undefined) => void }) => (
+    Select: ({
+      children,
+      onValueChange,
+    }: {
+      children: ReactNode
+      onValueChange: (value: string | undefined) => void
+    }) => (
       <div>
-        <button type="button" onClick={() => onValueChange('updated')}>select-updated</button>
-        <button type="button" onClick={() => onValueChange(undefined)}>select-empty</button>
+        <button type="button" onClick={() => onValueChange('updated')}>
+          select-updated
+        </button>
+        <button type="button" onClick={() => onValueChange(undefined)}>
+          select-empty
+        </button>
         {children}
       </div>
     ),
     SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
     SelectItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    SelectLabel: () => null,
     SelectTrigger: ({ children }: { children: ReactNode }) => <div>{children}</div>,
     SelectValue: () => <div>SelectValue</div>,
     SelectItemText: ({ children }: { children: ReactNode }) => <span>{children}</span>,

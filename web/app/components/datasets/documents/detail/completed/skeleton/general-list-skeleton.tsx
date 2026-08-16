@@ -1,5 +1,5 @@
+import { CheckboxSkeleton } from '@langgenius/dify-ui/checkbox'
 import * as React from 'react'
-import Checkbox from '@/app/components/base/checkbox'
 import Divider from '@/app/components/base/divider'
 import {
   SkeletonContainer,
@@ -49,15 +49,11 @@ CardSkelton.displayName = 'CardSkelton'
 const GeneralListSkeleton = () => {
   return (
     <div className="relative z-10 flex grow flex-col overflow-y-hidden">
-      <div className="absolute top-0 left-0 z-20 h-full w-full bg-dataset-chunk-list-mask-bg" />
+      <div className="absolute top-0 left-0 z-20 size-full bg-dataset-chunk-list-mask-bg" />
       {Array.from({ length: 10 }).map((_, index) => {
         return (
           <div key={index} className="flex items-start gap-x-2">
-            <Checkbox
-              key={`${index}-checkbox`}
-              className="mt-3.5 shrink-0"
-              disabled
-            />
+            <CheckboxSkeleton key={`${index}-checkbox`} className="mt-3.5 shrink-0" />
             <div className="grow">
               <CardSkelton />
               {index !== 9 && (
