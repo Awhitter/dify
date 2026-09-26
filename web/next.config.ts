@@ -46,7 +46,8 @@ const nextConfig: NextConfig = {
       { source: '/files/:path*', destination: `${API_PROXY_TARGET}/files/:path*` },
     ]
   },
-  output: 'standalone',
+  // Vercel owns tracing; standalone output remains available for Docker builds.
+  output: process.env.VERCEL ? undefined : 'standalone',
   compiler: {
     removeConsole: isDev ? false : { exclude: ['warn', 'error'] },
   },
