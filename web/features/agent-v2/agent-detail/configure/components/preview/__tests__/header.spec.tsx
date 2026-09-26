@@ -76,6 +76,22 @@ describe('AgentPreviewHeader', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
+  it.each(['build', 'preview'] as const)(
+    'should show the start-fresh tooltip on hover in %s mode',
+    async (mode) => {
+      const user = userEvent.setup()
+      renderHeader({ mode })
+
+      await user.hover(
+        screen.getByRole('button', { name: 'agentV2.agentDetail.configure.preview.restart' }),
+      )
+
+      expect(
+        await screen.findByText('agentV2.agentDetail.configure.preview.restart'),
+      ).toBeInTheDocument()
+    },
+  )
+
   it('should not emit refresh when the restart button is disabled', async () => {
     const user = userEvent.setup()
     const onRefresh = vi.fn()
@@ -106,7 +122,7 @@ describe('AgentPreviewHeader', () => {
     renderHeader({ mode: 'build', onOpenWorkingDirectory, showWorkingDirectoryAction: true })
 
     const fileSystemButton = screen.getByRole('button', {
-      name: 'agentV2.agentDetail.configure.workingDirectory.open',
+      name: 'agentV2.agentDetail.configure.workingDirectory.fileSystem',
     })
     expect(fileSystemButton).toHaveTextContent(
       'agentV2.agentDetail.configure.workingDirectory.fileSystem',
@@ -121,7 +137,9 @@ describe('AgentPreviewHeader', () => {
     renderHeader({ mode: 'build' })
 
     expect(
-      screen.queryByRole('button', { name: 'agentV2.agentDetail.configure.workingDirectory.open' }),
+      screen.queryByRole('button', {
+        name: 'agentV2.agentDetail.configure.workingDirectory.fileSystem',
+      }),
     ).not.toBeInTheDocument()
   })
 
@@ -134,12 +152,12 @@ describe('AgentPreviewHeader', () => {
       onModeChange,
     })
 
-    const modeControl = screen.getByRole('group', {
+    const modeControl = screen.getByRole('radiogroup', {
       name: 'agentV2.agentDetail.configure.rightPanel.modeLabel',
     })
 
     await user.click(
-      within(modeControl).getByRole('button', {
+      within(modeControl).getByRole('radio', {
         name: 'agentV2.agentDetail.configure.rightPanel.preview',
       }),
     )
@@ -155,7 +173,9 @@ describe('AgentPreviewHeader', () => {
     })
 
     await user.hover(
-      screen.getByLabelText('agentV2.agentDetail.configure.rightPanel.previewDisabledTip'),
+      screen.getByLabelText(
+        'agentV2.agentDetail.configure.rightPanel.preview. agentV2.agentDetail.configure.rightPanel.previewDisabledTip',
+      ),
     )
 
     expect(

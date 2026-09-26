@@ -1,6 +1,6 @@
 import os
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -41,9 +41,10 @@ import core.db.session_factory as session_factory_module
 from extensions import ext_redis
 from models.account import Account, Tenant, TenantAccountJoin, TenantAccountRole
 from models.base import TypeBase
+from tests.unit_tests.config_override import apply_config_overrides
 
 
-def _patch_redis_clients_on_loaded_modules():
+def _patch_redis_clients_on_loaded_modules() -> None:
     """Ensure any module-level redis_client references point to the shared redis_mock."""
 
     import sys
@@ -51,10 +52,9 @@ def _patch_redis_clients_on_loaded_modules():
     for module in list(sys.modules.values()):
         if module is None:
             continue
-        if hasattr(module, "redis_client"):
-            module.redis_client = redis_mock
-        if hasattr(module, "_pubsub_redis_client"):
-            module.pubsub_redis_client = redis_mock
+        for client_attribute in ("redis_client", "_pubsub_redis_client"):
+            if hasattr(module, client_attribute):
+                setattr(module, client_attribute, redis_mock)
 
 
 @pytest.fixture
@@ -63,13 +63,13 @@ def app() -> Flask:
 
 
 @pytest.fixture(autouse=True)
-def _provide_app_context(app: Flask):
+def _provide_app_context(app: Flask) -> Iterator[None]:
     with app.app_context():
         yield
 
 
 @pytest.fixture(autouse=True)
-def _patch_redis_clients():
+def _patch_redis_clients() -> Iterator[None]:
     """Patch redis_client to MagicMock only for unit test executions."""
 
     with (
@@ -81,7 +81,7 @@ def _patch_redis_clients():
 
 
 @pytest.fixture(autouse=True)
-def reset_redis_mock():
+def reset_redis_mock() -> None:
     """reset the Redis mock before each test"""
     redis_mock.reset_mock()
     redis_mock.get.return_value = None
@@ -91,7 +91,7 @@ def reset_redis_mock():
     redis_mock.exists.return_value = False
     redis_mock.set.return_value = None
     redis_mock.expire.return_value = None
-    redis_mock.hgetall.return_value = {}
+    redis_mock.hgetall.return_value = dict[bytes, bytes]()
     redis_mock.hdel.return_value = None
     redis_mock.incr.return_value = 1
 
@@ -100,17 +100,24 @@ def reset_redis_mock():
 
 
 @pytest.fixture(autouse=True)
-def reset_secret_key():
+def reset_secret_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure SECRET_KEY-dependent logic sees an empty config value by default."""
+    apply_config_overrides(monkeypatch, SECRET_KEY="")
 
-    from configs import dify_config
 
-    original = dify_config.SECRET_KEY
-    dify_config.SECRET_KEY = ""
-    try:
-        yield
-    finally:
-        dify_config.SECRET_KEY = original
+@pytest.fixture
+def config_overrides(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+    """Temporarily override fields on the shared typed application config.
+
+    Application modules import the same config instance, so mutating known
+    field names keeps tests scoped without replacing that instance with an
+    unconstrained mock. ``monkeypatch`` restores every value after the test.
+    """
+
+    def apply(**values: object) -> None:
+        apply_config_overrides(monkeypatch, **values)
+
+    return apply
 
 
 @pytest.fixture
@@ -154,6 +161,18 @@ def _sqlite_session_factory(
 
 
 @pytest.fixture
+def _unbound_session_factory(
+    _sqlite_session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> sessionmaker[Session]:
+    """Create one unbound factory and install it as the global test factory."""
+
+    factory = sessionmaker()
+    monkeypatch.setattr(session_factory_module, "_session_maker", factory)
+    return factory
+
+
+@pytest.fixture
 def sqlite_engine(_sqlite_engine: Engine) -> Engine:
     """Expose the pristine full-schema SQLite engine to tests."""
 
@@ -176,6 +195,25 @@ def sqlite_session(_sqlite_session_factory: sessionmaker[Session]) -> Iterator[S
     """
 
     with _sqlite_session_factory() as session:
+        yield session
+
+
+@pytest.fixture
+def unbound_session_factory(_unbound_session_factory: sessionmaker[Session]) -> sessionmaker[Session]:
+    """Expose an unbound factory for paths that must not require persistence."""
+
+    return _unbound_session_factory
+
+
+@pytest.fixture
+def unbound_session(_unbound_session_factory: sessionmaker[Session]) -> Iterator[Session]:
+    """Yield an unbound Session for paths that must not require persistence.
+
+    Bind-requiring database access fails, while bind-free Session operations can
+    still succeed.
+    """
+
+    with _unbound_session_factory() as session:
         yield session
 
 

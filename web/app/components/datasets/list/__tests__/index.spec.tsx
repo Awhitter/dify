@@ -2,9 +2,10 @@ import type { ReactElement, ReactNode } from 'react'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createStore, Provider } from 'jotai'
+import { queryClientAtom } from 'jotai-tanstack-query'
 import { hydrateRoot } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { useNewKnowledgeGuideDismissedValue } from '@/features/new-rag/storage'
 import { createConsoleQueryWrapper } from '@/test/console/query-data'
 import { render as renderWithConsoleState } from '@/test/console/render'
@@ -35,8 +36,8 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
   }
 })
 
-vi.mock('@/service/client', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@/service/client')>()
+vi.mock('@/service/console', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/service/console')>()
   return {
     ...original,
     consoleQuery: {
@@ -70,7 +71,6 @@ function NewKnowledgeGuideDismissedProbe() {
 const mockPush = vi.fn()
 const mockReplace = vi.fn()
 let mockConsoleState = {
-  isCurrentWorkspaceEditor: true,
   isCurrentWorkspaceManager: true,
   isCurrentWorkspaceOwner: true,
   knowledgeFsEnabled: false,
@@ -85,11 +85,6 @@ vi.mock('@/next/navigation', () => ({
 
 // Mock app context
 
-vi.mock('@/context/account-state', async () => {
-  const { createAccountStateModuleMock } = await import('@/test/console/state-fixture')
-
-  return createAccountStateModuleMock(() => mockConsoleState)
-})
 vi.mock('@/context/workspace-state', async () => {
   const { createWorkspaceStateModuleMock } = await import('@/test/console/state-fixture')
 
@@ -125,15 +120,6 @@ const renderList = (
 
 const render = (ui: ReactElement) => renderList(ui)
 const renderWithNuqs = renderList
-
-// Mock external api panel context
-const mockSetShowExternalApiPanel = vi.fn()
-vi.mock('@/context/external-api-panel-context', () => ({
-  useExternalApiPanel: () => ({
-    showExternalApiPanel: false,
-    setShowExternalApiPanel: mockSetShowExternalApiPanel,
-  }),
-}))
 
 // Mock useDocumentTitle hook
 vi.mock('@/hooks/use-document-title', () => ({
@@ -202,12 +188,11 @@ vi.mock('../../external-api/external-api-panel', () => ({
   ),
 }))
 
-// Mock SecretKeyModal — it depends on user profile context and service APIs
-// not configured in this test. ServiceApi always mounts the modal (controlled
-// by `isShow`) so we provide a lightweight stub.
-vi.mock('@/app/components/develop/secret-key/secret-key-modal', () => ({
-  default: ({ isShow }: { isShow: boolean }) =>
-    isShow ? <div data-testid="secret-key-modal" /> : null,
+// Mock ApiKeyModal — it depends on user profile context and service APIs
+// not configured in this test. ServiceApi always mounts the controlled modal,
+// so we provide a lightweight stub.
+vi.mock('@/app/components/api-key/api-key-modal', () => ({
+  ApiKeyModal: ({ open }: { open: boolean }) => (open ? <div data-testid="api-key-modal" /> : null),
 }))
 
 // Mock TagManagementModal
@@ -261,7 +246,6 @@ describe('List', () => {
     vi.clearAllMocks()
     localStorage.clear()
     mockConsoleState = {
-      isCurrentWorkspaceEditor: true,
       isCurrentWorkspaceManager: true,
       isCurrentWorkspaceOwner: true,
       knowledgeFsEnabled: false,
@@ -298,17 +282,15 @@ describe('List', () => {
 
       renderWithNuqs(<List />)
 
-      expect(
-        screen.getByRole('button', { name: 'dataset.newKnowledge.legacy' }),
-      ).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'dataset.newKnowledge.new' })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: 'dataset.newKnowledge.legacy' })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: 'dataset.newKnowledge.new' })).toBeInTheDocument()
     })
 
     it('should keep the legacy query active without requesting KnowledgeFS when disabled', async () => {
       renderWithNuqs(<List />, { searchParams: '?view=new' })
 
       expect(
-        screen.queryByRole('button', { name: 'dataset.newKnowledge.new' }),
+        screen.queryByRole('radio', { name: 'dataset.newKnowledge.new' }),
       ).not.toBeInTheDocument()
       expect(
         screen.queryByRole('region', { name: 'dataset.newKnowledge.new' }),
@@ -326,7 +308,7 @@ describe('List', () => {
       mockConsoleState.knowledgeFsEnabled = true
       const { onUrlUpdate } = renderWithNuqs(<List />)
 
-      await user.click(screen.getByRole('button', { name: 'dataset.newKnowledge.new' }))
+      await user.click(screen.getByRole('radio', { name: 'dataset.newKnowledge.new' }))
 
       expect(
         await screen.findByRole('region', { name: 'dataset.newKnowledge.new' }),
@@ -336,14 +318,32 @@ describe('List', () => {
       expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get('view')).toBe('new')
     })
 
+    it('should reset each view panel when its owning list unmounts', async () => {
+      const user = userEvent.setup()
+      mockConsoleState.knowledgeFsEnabled = true
+      renderWithNuqs(<List />)
+
+      await user.click(screen.getByRole('button', { name: 'dataset.externalAPIPanelTitle' }))
+      expect(screen.getByTestId('external-api-panel')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('radio', { name: 'dataset.newKnowledge.new' }))
+      expect(screen.queryByTestId('external-api-panel')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'dataset.externalAPIPanelTitle' }))
+      expect(screen.getByTestId('external-api-panel')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('radio', { name: 'dataset.newKnowledge.legacy' }))
+      expect(screen.queryByTestId('external-api-panel')).not.toBeInTheDocument()
+    })
+
     it('should restore the New Knowledge view from the URL', () => {
       mockConsoleState.knowledgeFsEnabled = true
 
       renderWithNuqs(<List />, { searchParams: '?view=new' })
 
       expect(screen.getByRole('region', { name: 'dataset.newKnowledge.new' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'dataset.newKnowledge.new' })).toHaveAttribute(
-        'aria-pressed',
+      expect(screen.getByRole('radio', { name: 'dataset.newKnowledge.new' })).toHaveAttribute(
+        'aria-checked',
         'true',
       )
     })
@@ -381,14 +381,15 @@ describe('List', () => {
       await user.click(within(guide).getByRole('button', { name: 'dataset.newKnowledge.gotIt' }))
       firstRender.unmount()
 
-      const store = createStore()
-      seedRegisteredConsoleStateFixture(store)
       const { wrapper: NuqsWrapper } = createNuqsTestWrapper()
-      const { wrapper: QueryWrapper } = createConsoleQueryWrapper({
+      const { queryClient, wrapper: QueryWrapper } = createConsoleQueryWrapper({
         systemFeatures: {
           knowledge_fs_enabled: mockConsoleState.knowledgeFsEnabled,
         },
       })
+      const store = createStore()
+      store.set(queryClientAtom, queryClient)
+      seedRegisteredConsoleStateFixture(store)
       const app = (
         <QueryWrapper>
           <Provider store={store}>
@@ -425,7 +426,6 @@ describe('List', () => {
 
     it('should hide external API panel button without dataset.external.connect', () => {
       mockConsoleState = {
-        isCurrentWorkspaceEditor: true,
         isCurrentWorkspaceManager: true,
         isCurrentWorkspaceOwner: true,
         knowledgeFsEnabled: false,
@@ -435,6 +435,7 @@ describe('List', () => {
       render(<List />)
 
       expect(screen.queryByText(/externalAPIPanelTitle/)).not.toBeInTheDocument()
+      expect(screen.queryByTestId('external-api-panel')).not.toBeInTheDocument()
     })
   })
 
@@ -483,7 +484,7 @@ describe('List', () => {
       const button = screen.getByText(/externalAPIPanelTitle/)
       fireEvent.click(button)
 
-      expect(mockSetShowExternalApiPanel).toHaveBeenCalledWith(true)
+      expect(screen.getByTestId('external-api-panel')).toBeInTheDocument()
     })
 
     it('should update search input value', () => {
@@ -535,9 +536,8 @@ describe('List', () => {
       expect(screen.queryByTestId('datasets-component')).not.toBeInTheDocument()
     })
 
-    it('should render first empty state when dataset.create_and_management is available without the legacy editor role', async () => {
+    it('should render first empty state when dataset.create_and_management is available', async () => {
       mockConsoleState = {
-        isCurrentWorkspaceEditor: false,
         isCurrentWorkspaceManager: true,
         isCurrentWorkspaceOwner: true,
         knowledgeFsEnabled: false,
@@ -562,7 +562,6 @@ describe('List', () => {
 
     it('should render a permission empty state without dataset creation permissions', async () => {
       mockConsoleState = {
-        isCurrentWorkspaceEditor: true,
         isCurrentWorkspaceManager: true,
         isCurrentWorkspaceOwner: true,
         knowledgeFsEnabled: false,
@@ -654,67 +653,13 @@ describe('List', () => {
       }
     })
 
-    it('should show ExternalAPIPanel when showExternalApiPanel is true', async () => {
-      // Re-mock to show external API panel
-      vi.doMock('@/context/external-api-panel-context', () => ({
-        useExternalApiPanel: () => ({
-          showExternalApiPanel: true,
-          setShowExternalApiPanel: mockSetShowExternalApiPanel,
-        }),
-      }))
+    it('should close ExternalAPIPanel when onClose is called', () => {
+      render(<List />)
 
-      vi.resetModules()
-      const { default: ListComponent } = await import('../index')
-
-      render(<ListComponent />)
-
-      expect(screen.getByTestId('external-api-panel')).toBeInTheDocument()
-      expect(screen.getByTestId('external-api-panel')).toHaveAttribute(
-        'data-can-manage-external-knowledge-api',
-        'true',
-      )
-    })
-
-    it('should not show ExternalAPIPanel without dataset.external.connect even when panel state is open', async () => {
-      mockConsoleState = {
-        isCurrentWorkspaceEditor: true,
-        isCurrentWorkspaceManager: true,
-        isCurrentWorkspaceOwner: true,
-        knowledgeFsEnabled: false,
-        workspacePermissionKeys: ['dataset.create_and_management'],
-      }
-      vi.doMock('@/context/external-api-panel-context', () => ({
-        useExternalApiPanel: () => ({
-          showExternalApiPanel: true,
-          setShowExternalApiPanel: mockSetShowExternalApiPanel,
-        }),
-      }))
-
-      vi.resetModules()
-      const { default: ListComponent } = await import('../index')
-
-      render(<ListComponent />)
+      fireEvent.click(screen.getByText(/externalAPIPanelTitle/))
+      fireEvent.click(screen.getByText('Close Panel'))
 
       expect(screen.queryByTestId('external-api-panel')).not.toBeInTheDocument()
-    })
-
-    it('should close ExternalAPIPanel when onClose is called', async () => {
-      vi.doMock('@/context/external-api-panel-context', () => ({
-        useExternalApiPanel: () => ({
-          showExternalApiPanel: true,
-          setShowExternalApiPanel: mockSetShowExternalApiPanel,
-        }),
-      }))
-
-      vi.resetModules()
-      const { default: ListComponent } = await import('../index')
-
-      render(<ListComponent />)
-
-      const closeButton = screen.getByText('Close Panel')
-      fireEvent.click(closeButton)
-
-      expect(mockSetShowExternalApiPanel).toHaveBeenCalledWith(false)
     })
 
     it('should show TagManagementModal when tag management is opened', () => {
@@ -726,7 +671,6 @@ describe('List', () => {
 
     it('should not show include all checkbox when not workspace owner', async () => {
       mockConsoleState = {
-        isCurrentWorkspaceEditor: true,
         isCurrentWorkspaceManager: true,
         isCurrentWorkspaceOwner: false,
         knowledgeFsEnabled: false,

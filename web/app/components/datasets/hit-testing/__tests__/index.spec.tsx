@@ -1,36 +1,16 @@
+import type { GetWorkspacesCurrentModelsModelTypesByModelTypeData } from '@dify/contracts/api/console/workspaces/types.gen'
+import type { OperationKey } from '@orpc/tanstack-query'
 import type { ReactNode } from 'react'
 import type { DataSet, HitTesting, HitTestingRecord, HitTestingResponse } from '@/models/datasets'
 import type { RetrievalConfig } from '@/types/app'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
+import { seedAccountProfileQuery } from '@/test/console/account-profile'
 import { render } from '@/test/console/render'
 import { RETRIEVE_METHOD } from '@/types/app'
 import HitTestingPage from '../index'
-
-vi.mock('@langgenius/dify-ui/pagination', () => ({
-  Pagination: ({
-    page,
-    totalPages,
-    onPageChange,
-    labels,
-  }: {
-    page: number
-    totalPages: number
-    onPageChange: (page: number) => void
-    labels: { next: string }
-  }) => (
-    <button
-      type="button"
-      aria-label={labels.next}
-      disabled={page >= totalPages}
-      onClick={() => onPageChange(page + 1)}
-    >
-      {page}/{totalPages}
-    </button>
-  ),
-}))
 
 vi.mock('@/app/components/datasets/common/retrieval-method-config', () => ({
   default: ({
@@ -139,11 +119,6 @@ vi.mock('@/context/dataset-detail', () => ({
   ),
 }))
 
-vi.mock('@/context/account-state', async () => {
-  const { createAccountStateModuleMock } = await import('@/test/console/state-fixture')
-
-  return createAccountStateModuleMock(() => mockConsoleState)
-})
 vi.mock('@/context/workspace-state', async () => {
   const { createWorkspaceStateModuleMock } = await import('@/test/console/state-fixture')
 
@@ -154,7 +129,7 @@ vi.mock('@/context/permission-state', async () => {
 
   return createPermissionStateModuleMock(() => mockConsoleState)
 })
-vi.mock('@/context/system-features-state', async () => {
+vi.mock('@/features/system-features/state', async () => {
   const { createSystemFeaturesStateModuleMock } = await import('@/test/console/state-fixture')
 
   return createSystemFeaturesStateModuleMock(() => mockConsoleState)
@@ -181,11 +156,11 @@ vi.mock('@/service/knowledge/use-dataset', () => ({
 vi.mock('@/service/knowledge/use-hit-testing', () => ({
   useHitTesting: vi.fn(() => ({
     mutateAsync: mockHitTestingMutateAsync,
-    isPending: false,
+    isLoading: false,
   })),
   useExternalKnowledgeBaseHitTesting: vi.fn(() => ({
     mutateAsync: mockExternalHitTestingMutateAsync,
-    isPending: false,
+    isLoading: false,
   })),
 }))
 
@@ -288,19 +263,8 @@ vi.mock('@/context/i18n', () => ({
   useDocLink: vi.fn(() => () => 'https://docs.example.com'),
 }))
 
-// Mock provider context for retrieval method config
-vi.mock('@/context/provider-context', () => ({
-  useProviderContext: vi.fn(() => ({
-    supportRetrievalMethods: ['semantic_search', 'full_text_search', 'hybrid_search'],
-  })),
-}))
-
 // Mock model list hook - include all exports used by child components
 vi.mock('@/app/components/header/account-setting/model-provider-page/hooks', () => ({
-  useModelList: vi.fn(() => ({
-    data: [],
-    isLoading: false,
-  })),
   useModelListAndDefaultModelAndCurrentProviderAndModel: vi.fn(() => ({
     modelList: [],
     defaultModel: undefined,
@@ -337,6 +301,7 @@ const createConsoleQueryClient = () =>
 
 const TestWrapper = ({ children }: { children: ReactNode }) => {
   const queryClient = createConsoleQueryClient()
+  seedAccountProfileQuery(queryClient, mockConsoleState.userProfile)
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
 
@@ -433,11 +398,11 @@ describe('HitTestingPage', () => {
       await import('@/service/knowledge/use-hit-testing')
     vi.mocked(useHitTesting).mockReturnValue({
       mutateAsync: mockHitTestingMutateAsync,
-      isPending: false,
+      isLoading: false,
     } as unknown as ReturnType<typeof useHitTesting>)
     vi.mocked(useExternalKnowledgeBaseHitTesting).mockReturnValue({
       mutateAsync: mockExternalHitTestingMutateAsync,
-      isPending: false,
+      isLoading: false,
     } as unknown as ReturnType<typeof useExternalKnowledgeBaseHitTesting>)
 
     const useBreakpoints = await import('@/hooks/use-breakpoints')
@@ -610,4 +575,20 @@ describe('HitTestingPage', () => {
     expect(mockRecordsRefetch).toHaveBeenCalledTimes(1)
     expect(await screen.findByText('External content')).toBeInTheDocument()
   })
+})
+
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>()
+  return {
+    ...actual,
+    useQuery: (options: {
+      queryKey: OperationKey<
+        'query',
+        { params: GetWorkspacesCurrentModelsModelTypesByModelTypeData['path'] }
+      >
+    }) =>
+      options.queryKey[0].includes('modelTypes')
+        ? { data: [], isPending: false }
+        : actual.useQuery(options),
+  }
 })

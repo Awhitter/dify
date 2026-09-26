@@ -1,13 +1,13 @@
 import type { NextConfig } from '@/next'
-import createMDX from '@next/mdx'
 import { codeInspectorPlugin } from 'code-inspector-plugin'
 import { env } from './env'
+
 const isDev = process.env.NODE_ENV === 'development'
-const withMDX = createMDX()
 const API_PROXY_TARGET = process.env.API_PROXY_TARGET || 'https://api.katailyst.com'
 const allowedDevOrigins = process.env.NEXT_ALLOWED_DEV_ORIGINS?.split(',')
-  .map(origin => origin.trim())
+  .map((origin) => origin.trim())
   .filter(Boolean)
+
 const nextConfig: NextConfig = {
   basePath: env.NEXT_PUBLIC_BASE_PATH,
   ...(allowedDevOrigins?.length ? { allowedDevOrigins } : {}),
@@ -18,9 +18,9 @@ const nextConfig: NextConfig = {
       bundler: 'turbopack',
     }),
   },
-  productionBrowserSourceMaps: false,
-  pageExtensions: ['ts', 'tsx', 'js', 'jsx', 'md', 'mdx'],
+  productionBrowserSourceMaps: false, // enable browser source map generation during the production build
   typescript: {
+    // https://nextjs.org/docs/api-reference/next.config.js/ignoring-typescript-errors
     ignoreBuildErrors: true,
   },
   async redirects() {
@@ -28,7 +28,13 @@ const nextConfig: NextConfig = {
       {
         source: '/explore/apps',
         destination: '/',
-        permanent: false,
+        permanent: true,
+      },
+      {
+        // TODO(2026-11-11): Remove after external education CTAs and active campaign links use the canonical route.
+        source: '/education-apply',
+        destination: '/education/apply',
+        permanent: true,
       },
     ]
   },
@@ -40,19 +46,11 @@ const nextConfig: NextConfig = {
       { source: '/files/:path*', destination: `${API_PROXY_TARGET}/files/:path*` },
     ]
   },
-  async headers() {
-    const antiFrame = [
-      { key: 'X-Frame-Options', value: 'DENY' },
-      { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
-    ]
-    return [
-      { source: '/device', headers: antiFrame },
-      { source: '/device/:path*', headers: antiFrame },
-    ]
-  },
-  output: 'standalone',
+  // Vercel owns tracing; standalone output remains available for Docker builds.
+  output: process.env.VERCEL ? undefined : 'standalone',
   compiler: {
     removeConsole: isDev ? false : { exclude: ['warn', 'error'] },
   },
 }
-export default withMDX(nextConfig)
+
+export default nextConfig

@@ -5,7 +5,7 @@ import type { CredentialFormSchema } from '@/app/components/header/account-setti
 import type { Tool } from '@/app/components/tools/types'
 import type { ToolWithProvider } from '@/app/components/workflow/types'
 import { Button } from '@langgenius/dify-ui/button'
-import { useBoolean } from 'ahooks'
+import { useState } from 'react'
 import { Infotip } from '@/app/components/base/infotip'
 import { FormTypeEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import { useLanguage } from '@/app/components/header/account-setting/model-provider-page/hooks'
@@ -80,13 +80,18 @@ const ToolFormItem: FC<Props> = ({
   const language = useLanguage()
   const { name, label, type, required, tooltip, input_schema } = schema
   const showSchemaButton = type === FormTypeEnum.object || type === FormTypeEnum.array
-  const showDescription = type === FormTypeEnum.textInput || type === FormTypeEnum.secretInput
-  const [isShowSchema, { setTrue: showSchema, setFalse: hideSchema }] = useBoolean(false)
+  const showDescription =
+    type === FormTypeEnum.textInput ||
+    type === FormTypeEnum.textNumber ||
+    type === FormTypeEnum.secretInput ||
+    type === FormTypeEnum.date ||
+    type === FormTypeEnum.dateRange
+  const [isShowSchema, setIsShowSchema] = useState(false)
   return (
     <div className="space-y-0.5 py-1">
       <div>
-        <div className="flex h-6 items-center">
-          <div className="system-sm-medium text-text-secondary">
+        <div className="flex min-h-6 min-w-0 items-center">
+          <div className="min-w-0 system-sm-medium wrap-break-word text-text-secondary">
             {label[language] || label.en_US}
           </div>
           {required && (
@@ -107,10 +112,10 @@ const ToolFormItem: FC<Props> = ({
               <Button
                 variant="ghost"
                 size="small"
-                onClick={showSchema}
+                onClick={() => setIsShowSchema(true)}
                 className="px-1 system-xs-regular text-text-tertiary"
               >
-                <span aria-hidden className="mr-1 i-ri-braces-line size-3.5" />
+                <span aria-hidden className="i-ri-braces-line size-3.5" />
                 <span>JSON Schema</span>
               </Button>
             </>
@@ -138,7 +143,12 @@ const ToolFormItem: FC<Props> = ({
       />
 
       {isShowSchema && (
-        <SchemaModal isShow onClose={hideSchema} rootName={name} schema={input_schema!} />
+        <SchemaModal
+          isShow
+          onClose={() => setIsShowSchema(false)}
+          rootName={name}
+          schema={input_schema!}
+        />
       )}
     </div>
   )

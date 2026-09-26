@@ -1,13 +1,11 @@
-import type { ReactNode } from 'react'
 import { screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { render } from '@/test/console/render'
 import DatasetsLayout from './layout'
 
 const mockReplace = vi.fn()
 const mockConsoleStateReader = vi.fn()
 let mockPathname = '/datasets'
-let mockExternalKnowledgeApiProviderEnabled: boolean | undefined
 
 vi.mock('@/next/navigation', () => ({
   useRouter: () => ({
@@ -27,25 +25,7 @@ vi.mock('@/context/permission-state', async () => {
   return createPermissionStateModuleMock(() => mockConsoleStateReader())
 })
 
-vi.mock('@/context/external-api-panel-context', () => ({
-  ExternalApiPanelProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-}))
-
-vi.mock('@/context/external-knowledge-api-context', () => ({
-  ExternalKnowledgeApiProvider: ({
-    children,
-    enabled,
-  }: {
-    children: ReactNode
-    enabled?: boolean
-  }) => {
-    mockExternalKnowledgeApiProviderEnabled = enabled
-    return <>{children}</>
-  },
-}))
-
 type ConsoleStateFixture = {
-  isCurrentWorkspaceEditor: boolean
   isCurrentWorkspaceDatasetOperator: boolean
   isLoadingCurrentWorkspace: boolean
   isLoadingWorkspacePermissionKeys: boolean
@@ -56,7 +36,6 @@ type ConsoleStateFixture = {
 }
 
 const baseContext: ConsoleStateFixture = {
-  isCurrentWorkspaceEditor: true,
   isCurrentWorkspaceDatasetOperator: false,
   isLoadingCurrentWorkspace: false,
   isLoadingWorkspacePermissionKeys: false,
@@ -77,7 +56,6 @@ describe('DatasetsLayout', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockPathname = '/datasets'
-    mockExternalKnowledgeApiProviderEnabled = undefined
     setConsoleState()
   })
 
@@ -117,7 +95,6 @@ describe('DatasetsLayout', () => {
 
   it('should render children without a page-level dataset permission', () => {
     setConsoleState({
-      isCurrentWorkspaceEditor: true,
       isCurrentWorkspaceDatasetOperator: true,
       workspacePermissionKeys: ['dataset.create_and_management', 'dataset.external.connect'],
     })
@@ -134,7 +111,6 @@ describe('DatasetsLayout', () => {
 
   it('should render children on the dataset list route without dataset permissions', () => {
     setConsoleState({
-      isCurrentWorkspaceEditor: false,
       isCurrentWorkspaceDatasetOperator: false,
       workspacePermissionKeys: [],
     })
@@ -241,32 +217,4 @@ describe('DatasetsLayout', () => {
       expect(mockReplace).not.toHaveBeenCalled()
     },
   )
-
-  it('should disable external knowledge API queries without dataset.external.connect', () => {
-    setConsoleState({
-      workspacePermissionKeys: [],
-    })
-
-    render(
-      <DatasetsLayout>
-        <div>datasets</div>
-      </DatasetsLayout>,
-    )
-
-    expect(mockExternalKnowledgeApiProviderEnabled).toBe(false)
-  })
-
-  it('should enable external knowledge API queries with dataset.external.connect', () => {
-    setConsoleState({
-      workspacePermissionKeys: ['dataset.external.connect'],
-    })
-
-    render(
-      <DatasetsLayout>
-        <div>datasets</div>
-      </DatasetsLayout>,
-    )
-
-    expect(mockExternalKnowledgeApiProviderEnabled).toBe(true)
-  })
 })
