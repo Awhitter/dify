@@ -14,7 +14,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useRouter } from '@/next/navigation'
-import { consoleClient, consoleQuery } from '@/service/client'
+import { consoleClient, consoleQuery } from '@/service/console'
 import { createRequestId } from './request-id'
 import { newKnowledgeDetailPath } from './routes'
 
@@ -419,7 +419,7 @@ function ReadyCrawlSelectionForm({
             type="button"
             variant="tertiary"
             size="small"
-            disabled={submissionLocked}
+            disabled={submitting || policyUncertain || selectionUncertain}
             loading={busy}
             onClick={onRecrawl}
           >
@@ -436,7 +436,7 @@ function ReadyCrawlSelectionForm({
             />
             {t(($) => $['newKnowledge.selectAll'])}
           </label>
-          <ul className="max-h-[280px] divide-y divide-divider-subtle overflow-y-auto">
+          <ul className="max-h-70 divide-y divide-divider-subtle overflow-y-auto">
             {pages.map((page, index) => {
               const skipReason = pageSkipReasons.get(page.pageId)
               const selectable = !skipReason
@@ -552,7 +552,7 @@ function ReadyCrawlSelectionForm({
         <Button
           type="submit"
           variant="primary"
-          disabled={!canSubmit || formBusy || workflowUncertain}
+          disabled={!canSubmit || busy || workflowUncertain}
           loading={submitting}
           aria-describedby={!selectedPageIds.size ? 'add-source-selection-requirement' : undefined}
         >

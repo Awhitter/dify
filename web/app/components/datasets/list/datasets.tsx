@@ -48,10 +48,6 @@ const Datasets = ({
     !isFetchingNextPage && (isLoading || (isPlaceholderData && isFetching && datasets.length === 0))
 
   useEffect(() => {
-    document.title = `${t(($) => $.knowledge, { ns: 'dataset' })} - Dify`
-  }, [t])
-
-  useEffect(() => {
     if (anchorRef.current) {
       observerRef.current = new IntersectionObserver(
         (entries) => {
@@ -73,7 +69,7 @@ const Datasets = ({
 
   return (
     <>
-      <nav className="relative grid grow grid-cols-[repeat(auto-fill,minmax(296px,1fr))] content-start gap-3 px-8 pt-2">
+      <div className="relative grid grow grid-cols-[repeat(auto-fill,minmax(296px,1fr))] content-start gap-3 px-8 pt-2">
         {showDatasetSkeleton ? (
           <DatasetCardSkeleton label={t(($) => $.loading, { ns: 'common' })} />
         ) : (
@@ -96,7 +92,7 @@ const Datasets = ({
         {!showDatasetSkeleton && !hasAnyDataset && emptyElement}
         {isFetchingNextPage && <Loading />}
         <div ref={anchorRef} className="h-0" />
-      </nav>
+      </div>
     </>
   )
 }

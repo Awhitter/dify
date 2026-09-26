@@ -53,10 +53,9 @@ export const NewCustomToolButton = ({ onRefreshData }: Props) => {
     <>
       <Button
         variant="secondary"
-        className="gap-0.5 px-3!"
+        className="px-3!"
         onClick={() => setIsShowEditCustomCollectionModal(true)}
         title={addSwaggerAPIAsToolLabel}
-        aria-label={addSwaggerAPIAsToolLabel}
       >
         <span aria-hidden className="i-ri-add-line size-4 shrink-0" />
         {addSwaggerAPIAsToolLabel}

@@ -135,7 +135,7 @@ const DocumentRow = memo(
           <div className="flex min-w-0 items-center gap-2.5">
             <span
               aria-hidden
-              className="i-ri-file-text-line size-[18px] shrink-0 text-text-tertiary"
+              className="i-ri-file-text-line size-4.5 shrink-0 text-text-tertiary"
             />
             <Link
               id={titleId}
@@ -198,7 +198,7 @@ const DocumentRow = memo(
             >
               <span aria-hidden className="i-ri-more-fill size-4" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent placement="bottom-end" sideOffset={4} popupClassName="w-44">
+            <DropdownMenuContent placement="bottom-end" sideOffset={4} className="w-44">
               <DropdownMenuItem
                 className="gap-2 px-3"
                 onClick={() => toast.info(t(($) => $['newKnowledge.documentActionsUnavailable']))}
@@ -275,7 +275,6 @@ export function DocumentsEmpty({
       <Button
         className="mt-4"
         variant="primary"
-        aria-busy={uploading}
         disabled={!canEdit}
         loading={uploading}
         aria-describedby={!canEdit ? readOnlyReasonId : undefined}
@@ -454,7 +453,6 @@ export function DocumentsList({
         </Button>
         <Button
           variant="primary"
-          aria-busy={uploading}
           disabled={!canEdit}
           loading={uploading}
           aria-describedby={!canEdit ? readOnlyReasonId : undefined}
@@ -468,11 +466,11 @@ export function DocumentsList({
         ref={resultsContainerRef}
         aria-labelledby="new-knowledge-documents-title"
         aria-busy={completingResults || isFetchingNextPage || sourcesPending || tasksPending}
-        className="mt-4 overflow-x-auto rounded-lg outline-hidden focus-visible:ring-2 focus-visible:ring-state-accent-solid"
+        className="mt-4 overflow-x-auto rounded-lg focus-visible:ring-2 focus-visible:ring-state-accent-solid focus-visible:outline-hidden"
         role="region"
         tabIndex={-1}
       >
-        <table className="w-full table-fixed border-collapse text-left lg:min-w-[900px] lg:table-auto">
+        <table className="w-full table-fixed border-collapse text-left lg:min-w-225 lg:table-auto">
           <thead className="system-2xs-medium text-text-tertiary uppercase">
             <tr>
               <th className="pb-2 font-medium">
@@ -593,7 +591,6 @@ export function DocumentsList({
           <Button
             ref={loadMoreButtonRef}
             aria-label={`${tCommon(($) => $['operation.retry'])} · ${t(($) => $['newKnowledge.documentsErrorDescription'])}`}
-            aria-busy={isFetchingNextDocumentPage}
             loading={isFetchingNextDocumentPage}
             onBlur={(event) => {
               if (event.relatedTarget) restoreLoadMoreFocusRef.current = false
@@ -610,7 +607,6 @@ export function DocumentsList({
         <div className="mt-5 flex justify-center">
           <Button
             ref={loadMoreButtonRef}
-            aria-busy={isFetchingNextPage}
             loading={isFetchingNextPage}
             onBlur={(event) => {
               if (event.relatedTarget) restoreLoadMoreFocusRef.current = false
@@ -659,7 +655,6 @@ export function DocumentBulkActions({
       >
         <Button
           aria-describedby={disabled ? 'document-reindex-unavailable' : undefined}
-          aria-busy={reindexing}
           className="shrink-0"
           disabled={disabled}
           loading={reindexing}

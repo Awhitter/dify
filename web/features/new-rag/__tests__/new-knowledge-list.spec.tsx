@@ -16,10 +16,6 @@ type ListKnowledgeSpacesInfiniteOptions = {
   }
 }
 
-const externalApiPanelMock = vi.hoisted(() => ({
-  open: false,
-  setOpen: vi.fn(),
-}))
 const toastInfoMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@langgenius/dify-ui/toast', () => ({
@@ -46,23 +42,23 @@ const permissionStateMock = vi.hoisted(() => ({
   workspacePermissionKeysAtom: Symbol('workspacePermissionKeysAtom'),
 }))
 
-vi.mock('@/context/external-api-panel-context', () => ({
-  useExternalApiPanel: () => ({
-    showExternalApiPanel: externalApiPanelMock.open,
-    setShowExternalApiPanel: externalApiPanelMock.setOpen,
-  }),
-}))
-
 vi.mock('@/service/knowledge/use-dataset', () => ({
   useDatasetApiBaseUrl: () => ({ data: { api_base_url: 'https://api.example.com' } }),
 }))
 
 vi.mock('@/app/components/datasets/extra-info/service-api', () => ({
-  default: () => <button type="button">dataset.serviceApi.title</button>,
+  ServiceApi: () => <button type="button">dataset.serviceApi.title</button>,
 }))
 
 vi.mock('@/app/components/datasets/external-api/external-api-panel', () => ({
-  default: () => <div>external API panel</div>,
+  default: ({ onClose }: { onClose: () => void }) => (
+    <div>
+      external API panel
+      <button type="button" onClick={onClose}>
+        close external API panel
+      </button>
+    </div>
+  ),
 }))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
@@ -89,7 +85,12 @@ vi.mock('@/context/permission-state', () => ({
   workspacePermissionKeysAtom: permissionStateMock.workspacePermissionKeysAtom,
 }))
 
-vi.mock('@/service/client', () => ({
+vi.mock('@/context/i18n', () => ({
+  useDocLink: () => (path?: string) => `https://docs.example.com${path ?? ''}`,
+  useLocale: () => 'en-US',
+}))
+
+vi.mock('@/service/console', () => ({
   consoleQuery: {
     knowledgeFs: {
       listKnowledgeSpaces: {
@@ -109,7 +110,6 @@ const setResolvedPage = (items: KnowledgeSpaceList['items'] = []) => {
 describe('NewKnowledgeList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    externalApiPanelMock.open = false
     queryMock.data = undefined
     queryMock.error = null
     queryMock.hasNextPage = false
@@ -144,6 +144,17 @@ describe('NewKnowledgeList', () => {
     })
     expect(options?.getNextPageParam({ items: [], nextCursor: 'next-page' })).toBe('next-page')
     expect(options?.getNextPageParam({ items: [] })).toBeUndefined()
+  })
+
+  it('links the guide through the shared documentation URL', () => {
+    setResolvedPage()
+
+    renderWithNuqs(<NewKnowledgeList view="new" onViewChange={vi.fn()} />)
+
+    expect(screen.getByRole('link', { name: 'dataset.newKnowledge.learnMore' })).toHaveAttribute(
+      'href',
+      'https://docs.example.com/use-dify/knowledge/readme',
+    )
   })
 
   it('links real knowledge spaces to the new detail shell', () => {
@@ -184,7 +195,7 @@ describe('NewKnowledgeList', () => {
     ).toHaveAttribute('href', '/datasets/new/space-2/sources')
     expect(within(list).getByText('Answers for customer support')).toBeInTheDocument()
     expect(within(list).getByText('dataset.newKnowledge.noDescription')).toBeInTheDocument()
-    expect(within(supportCard).getByLabelText('camera')).toBeInTheDocument()
+    expect(within(supportCard).getByTitle('camera')).toBeInTheDocument()
     expect(within(list).getAllByText('dataset.newKnowledge.cardType')).toHaveLength(2)
     expect(within(list).getAllByText('dataset.newKnowledge.tags')).toHaveLength(2)
     expect(within(list).getAllByText('dataset.newKnowledge.documentsUnavailable')).toHaveLength(2)
@@ -219,7 +230,9 @@ describe('NewKnowledgeList', () => {
     renderWithNuqs(<NewKnowledgeList view="new" onViewChange={vi.fn()} />)
 
     await user.click(screen.getByRole('button', { name: 'dataset.externalAPIPanelTitle' }))
-    expect(externalApiPanelMock.setOpen).toHaveBeenCalledWith(true)
+    expect(screen.getByText('external API panel')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'close external API panel' }))
+    expect(screen.queryByText('external API panel')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'dataset.serviceApi.title' })).toBeInTheDocument()
 
     const tags = screen.getByRole('button', { name: 'dataset.newKnowledge.tags' })
@@ -296,6 +309,10 @@ describe('NewKnowledgeList', () => {
     expect(
       screen.queryByRole('link', { name: /common\.operation\.create/ }),
     ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'dataset.externalAPIPanelTitle' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('external API panel')).not.toBeInTheDocument()
     expect(screen.getByText('dataset.newKnowledge.readOnlyEmpty')).toBeInTheDocument()
   })
 
