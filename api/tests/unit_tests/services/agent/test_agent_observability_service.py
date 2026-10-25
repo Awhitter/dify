@@ -18,8 +18,9 @@ from models.enums import (
     FeedbackRating,
     MessageStatus,
 )
-from models.model import App, AppMode, Conversation, IconType, Message, MessageFeedback
+from models.model import App, AppMode, Conversation, Message, MessageFeedback
 from models.workflow import (
+    Workflow,
     WorkflowExecutionStatus,
     WorkflowNodeExecutionModel,
     WorkflowNodeExecutionTriggeredFrom,
@@ -30,25 +31,16 @@ from models.workflow import (
 from services.agent import observability_service as observability_service_module
 from services.agent.observability_service import AgentLogQueryParams, AgentObservabilityService
 from tests.unit_tests.config_override import apply_config_overrides
+from tests.unit_tests.model_factories import make_app, make_conversation, make_message
 
 
 def _app(*, app_id: str = "app-1", name: str = "Iris", mode: AppMode = AppMode.AGENT_CHAT) -> App:
-    return App(
-        id=app_id,
-        tenant_id="tenant-1",
-        name=name,
-        mode=mode,
-        icon_type=IconType.EMOJI,
-        icon="robot",
-        icon_background="#fff",
-        enable_site=False,
-        enable_api=False,
-    )
+    return make_app(app_id=app_id, name=name, mode=mode, icon_background="#fff", enable_site=False, enable_api=False)
 
 
 def _conversation(*, conversation_id: str = "conversation-1", app_id: str = "app-1") -> Conversation:
-    return Conversation(
-        id=conversation_id,
+    return make_conversation(
+        conversation_id=conversation_id,
         app_id=app_id,
         mode=AppMode.AGENT_CHAT,
         name="Debug conversation",
@@ -66,8 +58,8 @@ def _message(
     created_at: datetime | None = None,
 ) -> Message:
     timestamp = created_at or naive_utc_now()
-    return Message(
-        id=message_id,
+    return make_message(
+        message_id=message_id,
         app_id=app_id,
         conversation_id=conversation_id,
         inputs={},
@@ -281,15 +273,6 @@ def test_statistics_workflow_app_source_covers_all_versions_and_nodes() -> None:
     assert "wanb.node_id = :node_id" not in scope_sql
 
 
-def test_statistics_workflow_chat_context_only_uses_chat_runs() -> None:
-    source_filter = AgentObservabilityService.resolve_source_filter("workflow:app-2")
-
-    scope_sql = AgentObservabilityService._statistics_workflow_message_scope_sql(source_filter)
-
-    assert "wr.id = m.workflow_run_id" in scope_sql
-    assert "wr.type = :chat_workflow_type" in scope_sql
-
-
 def test_workflow_metadata_numeric_sql_supports_postgresql_and_mysql(monkeypatch: pytest.MonkeyPatch) -> None:
     apply_config_overrides(monkeypatch, DB_TYPE="postgresql")
 
@@ -496,6 +479,97 @@ def test_list_workflow_logs_uses_node_executions_without_messages(sqlite_session
 
     assert rows[0]["id"] == "node-execution-1"
     assert rows[0]["source"]["app_name"] == "Marketing Department"
+
+
+@pytest.mark.parametrize("source_identity", ["persisted-binding", "source-version", "unique-legacy-binding"])
+def test_nested_agent_logs_and_messages_keep_source_identity(sqlite_session: Session, source_identity: str) -> None:
+    source_app = _app(app_id="workflow-app-1", name="Source workflow", mode=AppMode.WORKFLOW)
+    source = Workflow(
+        id="workflow-1",
+        tenant_id="tenant-1",
+        app_id=source_app.id,
+        type=WorkflowType.WORKFLOW,
+        version="v1",
+        graph="{}",
+        _features="{}",
+        created_by="account-1",
+    )
+    run = _workflow_run()
+    run.app_id, run.workflow_id, run.version = "caller-app", "caller-workflow", "caller-version"
+    execution = _node_execution()
+    execution.triggered_from = WorkflowNodeExecutionTriggeredFrom.WORKFLOW_TOOL
+    binding = _workflow_binding()
+    if source_identity == "persisted-binding":
+        execution.process_data = json.dumps({"workflow_agent_binding_id": binding.id})
+    unused_binding = _workflow_binding(binding_id="unused-binding")
+    unused_binding.workflow_version = "v2"
+    sqlite_session.add_all([source_app, run, execution, binding])
+    if source_identity != "unique-legacy-binding":
+        sqlite_session.add_all([source, unused_binding])
+    sqlite_session.commit()
+    service = AgentObservabilityService(sqlite_session)
+    params = AgentLogQueryParams(sources=("workflow:workflow-app-1",))
+
+    logs = service.list_logs(app=_app(app_id="agent-app"), agent_id="agent-1", params=params)
+    messages = service.list_log_messages(
+        app=_app(app_id="agent-app"), agent_id="agent-1", conversation_id=execution.id, params=params
+    )
+
+    assert logs["total"] == messages["total"] == 1
+    assert logs["data"][0]["id"] == messages["data"][0]["id"] == execution.id
+    assert logs["data"][0]["source"]["id"] == "workflow:workflow-app-1:workflow-1:v1:node-1"
+    assert messages["data"][0]["total_tokens"] == 454_064
+    for source_filter in ("workflow:caller-app", "workflow:workflow-app-1:workflow-1:v2:node-1"):
+        params = AgentLogQueryParams(sources=(source_filter,))
+        assert service.list_logs(app=_app(app_id="agent-app"), agent_id="agent-1", params=params)["total"] == 0
+        assert (
+            service.list_log_messages(
+                app=_app(app_id="agent-app"), agent_id="agent-1", conversation_id=execution.id, params=params
+            )["total"]
+            == 0
+        )
+
+    if source_identity == "unique-legacy-binding":
+        # Without a captured binding or source Workflow, another Agent/version
+        # makes attribution ambiguous, even when filtering for only agent-1.
+        unused_binding.agent_id = "another-agent"
+        sqlite_session.add(unused_binding)
+        sqlite_session.commit()
+        params = AgentLogQueryParams(sources=("workflow",))
+        assert service.list_logs(app=_app(app_id="agent-app"), agent_id="agent-1", params=params)["total"] == 0
+        assert (
+            service.list_log_messages(
+                app=_app(app_id="agent-app"), agent_id="agent-1", conversation_id=execution.id, params=params
+            )["total"]
+            == 0
+        )
+
+
+@pytest.mark.parametrize("mismatch", ["run-tenant", "source-tenant", "binding-id", "unrelated-run"])
+def test_workflow_agent_observability_rejects_mismatched_ownership(sqlite_session: Session, mismatch: str) -> None:
+    source_app = _app(app_id="workflow-app-1", mode=AppMode.WORKFLOW)
+    run, execution, binding = _workflow_run(), _node_execution(), _workflow_binding()
+    execution.process_data = json.dumps({"workflow_agent_binding_id": binding.id})
+    if mismatch == "run-tenant":
+        run.tenant_id = "other-tenant"
+    elif mismatch == "source-tenant":
+        source_app.tenant_id = "other-tenant"
+    elif mismatch == "binding-id":
+        execution.process_data = json.dumps({"workflow_agent_binding_id": "missing-binding"})
+    else:
+        run.app_id, run.workflow_id = "unrelated-app", "unrelated-workflow"
+    sqlite_session.add_all([source_app, run, execution, binding])
+    sqlite_session.commit()
+    service = AgentObservabilityService(sqlite_session)
+    params = AgentLogQueryParams(sources=("workflow",))
+
+    assert service.list_logs(app=_app(app_id="agent-app"), agent_id="agent-1", params=params)["total"] == 0
+    assert (
+        service.list_log_messages(
+            app=_app(app_id="agent-app"), agent_id="agent-1", conversation_id=execution.id, params=params
+        )["total"]
+        == 0
+    )
 
 
 def test_list_workflow_messages_uses_node_execution_identity(

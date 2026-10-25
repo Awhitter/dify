@@ -10,6 +10,8 @@ from typing import Literal, NotRequired, TypedDict
 from unittest.mock import MagicMock
 
 from models.dataset import Document
+from models.enums import DataSourceType, DocumentCreatedFrom
+from services.knowledge.dataset_read_service import get_document_source_detail
 
 
 class LocalFileInfo(TypedDict):
@@ -66,6 +68,20 @@ case_2: LocalFileCase = {
 cases: list[AnyCase] = [case_1]
 
 
+def make_document(*, data_source_type: str, data_source_info: str) -> Document:
+    return Document(
+        tenant_id="tenant-id",
+        dataset_id="dataset-id",
+        position=1,
+        data_source_type=DataSourceType(data_source_type),
+        batch="batch-id",
+        name="document.txt",
+        created_from=DocumentCreatedFrom.WEB,
+        created_by="account-id",
+        data_source_info=data_source_info,
+    )
+
+
 class TestDocumentDetailDataSourceInfo:
     """Test cases for document detail API data_source_info serialization."""
 
@@ -73,7 +89,7 @@ class TestDocumentDetailDataSourceInfo:
         """Test that data_source_info_dict returns raw JSON data for all data_source_type values."""
         # Test data for different data_source_type values
         for case in cases:
-            document = Document(
+            document = make_document(
                 data_source_type=case["data_source_type"],
                 data_source_info=case["data_source_info"],
             )
@@ -93,7 +109,7 @@ class TestDocumentDetailDataSourceInfo:
             "created_at": "2024-01-01T00:00:00Z",
         }
 
-        document = Document(
+        document = make_document(
             data_source_type="local_file",
             data_source_info=json.dumps(test_data),
         )
@@ -111,34 +127,34 @@ class TestDocumentDetailDataSourceInfo:
         """Test that notion_import and website_crawl return raw data in data_source_detail_dict."""
         # Test notion_import
         notion_data: NotionImportInfo = {"notion_page_id": "page-123", "workspace_id": "ws-456"}
-        document = Document(
+        document = make_document(
             data_source_type="notion_import",
             data_source_info=json.dumps(notion_data),
         )
 
         # data_source_detail_dict should return raw data for notion_import
-        detail_result = document.get_data_source_detail_dict(session=MagicMock())
+        detail_result = get_document_source_detail(document, session=MagicMock())
         assert detail_result == notion_data
 
         # Test website_crawl
         website_data: WebsiteCrawlInfo = {"url": "https://example.com", "job_id": "job-789"}
-        document = Document(
+        document = make_document(
             data_source_type="website_crawl",
             data_source_info=json.dumps(website_data),
         )
 
         # data_source_detail_dict should return raw data for website_crawl
-        detail_result = document.get_data_source_detail_dict(session=MagicMock())
+        detail_result = get_document_source_detail(document, session=MagicMock())
         assert detail_result == website_data
 
     def test_local_file_data_source_detail_dict_without_db(self):
         """Test that local_file returns empty data_source_detail_dict (this doesn't need DB context)."""
         # Test local_file - this should work without database context since it returns {} early
-        document = Document(
+        document = make_document(
             data_source_type="local_file",
             data_source_info=json.dumps({"file_path": "/tmp/test.txt"}),
         )
 
         # Should return empty dict for local_file type (handled in the model)
-        detail_result = document.get_data_source_detail_dict(session=MagicMock())
+        detail_result = get_document_source_detail(document, session=MagicMock())
         assert detail_result == {}

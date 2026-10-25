@@ -1,19 +1,19 @@
 import importlib
 import json
 import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
+from core.rag.datasource.vdb.vector_integration_test_support import FakeModule
 from core.rag.models.document import Document
 from models.dataset import Dataset
 
 
 def _build_fake_tablestore_module():
-    tablestore = types.ModuleType("tablestore")
+    tablestore = FakeModule("tablestore")
 
     class _BatchGetRowRequest:
         def __init__(self):
@@ -305,8 +305,8 @@ def test_tablestore_factory_uses_existing_or_generated_collection(tablestore_mod
     monkeypatch.setattr(tablestore_module.dify_config, "TABLESTORE_NORMALIZE_FULLTEXT_BM25_SCORE", True)
 
     with patch.object(tablestore_module, "TableStoreVector", return_value="vector") as vector_cls:
-        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock())
-        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock())
+        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock(), session=None)
+        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock(), session=None)
 
     assert result_1 == "vector"
     assert result_2 == "vector"

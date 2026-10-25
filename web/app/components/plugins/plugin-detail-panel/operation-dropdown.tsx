@@ -16,7 +16,7 @@ import { systemFeaturesQueryOptions } from '@/features/system-features/client'
 import { PluginSource } from '../types'
 
 type OperationDropdownProps = Readonly<
-  Pick<DropdownMenuContentProps, 'alignOffset' | 'placement' | 'sideOffset'> & {
+  Pick<DropdownMenuContentProps, 'side' | 'align'> & {
     source: PluginSource
     onInfo: () => void
     onCheckVersion: () => void
@@ -25,6 +25,7 @@ type OperationDropdownProps = Readonly<
     detailUrl: string
     popupClassName?: string
     triggerSize?: 'm' | 'xs'
+    triggerAriaLabel?: string
     destructiveRemove?: boolean
     showCheckVersion?: boolean
     showRemove?: boolean
@@ -38,16 +39,16 @@ export function OperationDropdown({
   onCheckVersion,
   onRemove,
   onViewReadme,
-  placement = 'bottom-end',
-  sideOffset = 4,
-  alignOffset = 0,
+  side,
+  align,
   popupClassName,
   triggerSize = 'm',
+  triggerAriaLabel,
   destructiveRemove = false,
   showCheckVersion = true,
   showRemove = true,
 }: OperationDropdownProps) {
-  const { t } = useTranslation()
+  const { t } = useTranslation(['plugin'])
   const { data: enable_marketplace } = useSuspenseQuery({
     ...systemFeaturesQueryOptions(),
     select: (s) => s.enable_marketplace,
@@ -73,7 +74,9 @@ export function OperationDropdown({
       <DropdownMenuTrigger
         render={
           <IconButton
-            aria-label={t(($) => $['detailPanel.operation.moreActions'], { ns: 'plugin' })}
+            aria-label={
+              triggerAriaLabel ?? t(($) => $['detailPanel.operation.moreActions'], { ns: 'plugin' })
+            }
             size={triggerSize === 'xs' ? 'xs' : 'md'}
             className="data-popup-open:bg-state-base-hover"
           >
@@ -81,12 +84,7 @@ export function OperationDropdown({
           </IconButton>
         }
       />
-      <DropdownMenuContent
-        placement={placement}
-        sideOffset={sideOffset}
-        alignOffset={alignOffset}
-        className={cn('w-48 py-1', popupClassName)}
-      >
+      <DropdownMenuContent side={side} align={align} className={cn('w-48 py-1', popupClassName)}>
         {showInfo && (
           <DropdownMenuItem
             className="px-2 py-1 system-md-regular text-text-secondary"

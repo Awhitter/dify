@@ -11,16 +11,24 @@ from flask import Flask, current_app
 from sqlalchemy import Engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from core.app.app_config.entities import AppAdditionalFeatures
 from core.app.entities.queue_entities import QueueAnnotationReplyEvent, QueueRetrieverResourcesEvent
-from core.app.entities.task_entities import MessageStreamResponse, StreamEvent, TaskStateMetadata
+from core.app.entities.task_entities import MessageStreamResponse, StreamEvent, TaskStateMetadata, WorkflowTaskState
 from core.app.task_pipeline import message_cycle_manager as message_cycle_manager_module
 from core.app.task_pipeline.message_cycle_manager import MessageCycleManager
 from core.rag.entities import RetrievalSourceMetadata
 from graphon.file import FileTransferMethod, FileType
 from models import model as model_module
+from models.account import Account
 from models.base import TypeBase
 from models.enums import ConversationFromSource, CreatorUserRole, MessageFileBelongsTo
-from models.model import App, AppMode, Conversation, MessageAnnotation, MessageFile
+from models.model import App, Conversation, MessageAnnotation, MessageFile
+from tests.unit_tests.model_factories import make_app, make_conversation
+
+
+@dataclass(frozen=True)
+class _AppConfigWithFeatures:
+    additional_features: AppAdditionalFeatures
 
 
 @dataclass(frozen=True)
@@ -46,29 +54,18 @@ def cycle_db(sqlite_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator
 
 
 def _app(*, app_id: str = "app-id", tenant_id: str = "tenant-1") -> App:
-    return App(
-        id=app_id,
-        tenant_id=tenant_id,
-        name="Test App",
-        description="",
-        mode=AppMode.CHAT,
-        enable_site=True,
-        enable_api=True,
-        max_active_requests=0,
-    )
+    return make_app(app_id=app_id, tenant_id=tenant_id, icon_type=None, max_active_requests=0)
 
 
 def _conversation(*, conversation_id: str = "conv-1", app_id: str = "app-id") -> Conversation:
-    conversation = Conversation(
+    return make_conversation(
+        conversation_id=conversation_id,
         app_id=app_id,
-        mode=AppMode.CHAT,
         name="",
         status="normal",
         from_source=ConversationFromSource.API,
         inputs={},
     )
-    conversation.id = conversation_id
-    return conversation
 
 
 def _message_file(
@@ -425,15 +422,12 @@ class TestMessageCycleManagerOptimization:
         assert conversation.name == (long_query[:47] + "...")
         assert any(record.levelno == logging.ERROR for record in caplog.records)
 
-    def test_handle_annotation_reply_sets_metadata(self, message_cycle_manager, unbound_session: Session):
-        """Populate task metadata from annotation reply events.
-
-        Args: message_cycle_manager with TaskStateMetadata and a mocked AppAnnotationService.
-        Returns: The fetched annotation object.
-        Side effects: Updates metadata.annotation_reply with id and account name.
-        """
-        message_cycle_manager._task_state = SimpleNamespace(metadata=TaskStateMetadata())
-
+    @pytest.mark.parametrize("author_name", ["Alice", "", None])
+    def test_handle_annotation_reply_reads_author_in_one_query(
+        self, message_cycle_manager, sqlite_session: Session, sqlite_engine: Engine, author_name: str | None
+    ):
+        """Read annotation content and author metadata together, including deleted authors."""
+        message_cycle_manager._task_state = WorkflowTaskState()
         annotation = MessageAnnotation(
             app_id="app-id",
             question="question",
@@ -441,34 +435,42 @@ class TestMessageCycleManagerOptimization:
             account_id="acct-1",
         )
         annotation.id = "ann-1"
-        session = unbound_session
+        sqlite_session.add(annotation)
+        if author_name is not None:
+            account = Account(name=author_name, email="author@example.com")
+            account.id = annotation.account_id
+            sqlite_session.add(account)
+        sqlite_session.commit()
+        sqlite_session.expunge_all()
+        queries: list[str] = []
 
-        with (
-            patch("core.app.task_pipeline.message_cycle_manager.AppAnnotationService") as mock_service,
-            patch("core.app.task_pipeline.message_cycle_manager.AccountService") as account_service,
-        ):
-            mock_service.get_annotation_by_id.return_value = annotation
-            account_service.get_account_by_id.return_value = SimpleNamespace(name="Alice")
+        def capture_sql(_connection, _cursor, statement: str, _parameters, _context, _executemany) -> None:
+            queries.append(statement)
 
+        event.listen(sqlite_engine, "before_cursor_execute", capture_sql)
+        try:
             result = message_cycle_manager.handle_annotation_reply(
-                QueueAnnotationReplyEvent(message_annotation_id="ann-1"), session
+                QueueAnnotationReplyEvent(message_annotation_id="ann-1"), sqlite_session
             )
+        finally:
+            event.remove(sqlite_engine, "before_cursor_execute", capture_sql)
 
-        assert result == annotation
+        assert result is not None
+        assert result.id == "ann-1"
+        assert result.content == "answer"
         assert message_cycle_manager._task_state.metadata.annotation_reply.id == "ann-1"
-        assert message_cycle_manager._task_state.metadata.annotation_reply.account.name == "Alice"
-        account_service.get_account_by_id.assert_called_once_with("acct-1", session=session)
+        assert message_cycle_manager._task_state.metadata.annotation_reply.account.name == (
+            author_name if author_name is not None else "Dify user"
+        )
+        assert len(queries) == 1
+        assert "LEFT OUTER JOIN accounts" in queries[0]
 
-    def test_handle_annotation_reply_returns_none_when_missing(self, message_cycle_manager):
+    def test_handle_annotation_reply_returns_none_when_missing(self, message_cycle_manager, sqlite_session: Session):
         """Return None and keep metadata unchanged when annotation is not found."""
-        message_cycle_manager._task_state = SimpleNamespace(metadata=TaskStateMetadata())
-
-        with patch("core.app.task_pipeline.message_cycle_manager.AppAnnotationService") as mock_service:
-            mock_service.get_annotation_by_id.return_value = None
-
-            result = message_cycle_manager.handle_annotation_reply(
-                QueueAnnotationReplyEvent(message_annotation_id="missing"), Mock()
-            )
+        message_cycle_manager._task_state = WorkflowTaskState()
+        result = message_cycle_manager.handle_annotation_reply(
+            QueueAnnotationReplyEvent(message_annotation_id="missing"), sqlite_session
+        )
 
         assert result is None
         assert message_cycle_manager._task_state.metadata.annotation_reply is None
@@ -532,7 +534,7 @@ class TestMessageCycleManagerOptimization:
         message_cycle_manager._application_generate_entity.app_config = SimpleNamespace(additional_features=None)
         message_cycle_manager._task_state = SimpleNamespace(metadata=TaskStateMetadata())
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Additional features not found"):
             message_cycle_manager.handle_retriever_resources(QueueRetrieverResourcesEvent(retriever_resources=[]))
 
     def test_handle_retriever_resources_skips_none_entries(self, message_cycle_manager):
@@ -547,6 +549,39 @@ class TestMessageCycleManagerOptimization:
 
         assert len(message_cycle_manager._task_state.metadata.retriever_resources) == 1
         assert message_cycle_manager._task_state.metadata.retriever_resources[0].position == 1
+
+    def test_knowledge_receipts_survive_message_metadata_without_collapsing_same_document(self, message_cycle_manager):
+        from dify_agent.protocol.knowledge_fs import KnowledgeFsCitation
+
+        message_cycle_manager._application_generate_entity.app_config = _AppConfigWithFeatures(
+            additional_features=AppAdditionalFeatures(show_retrieve_source=True)
+        )
+        message_cycle_manager._task_state = WorkflowTaskState(metadata=TaskStateMetadata())
+        sources = [
+            RetrievalSourceMetadata(
+                dataset_id="space",
+                document_id="doc",
+                data_source_type="knowledge_fs",
+                knowledge_fs_citation=KnowledgeFsCitation(
+                    id="kfs_" + char * 32,
+                    control_space_id="00000000-0000-4000-8000-000000000001",
+                    space_name="Docs",
+                    node_id=f"node-{char}",
+                    document_asset_id="doc",
+                    artifact_hash="hash",
+                ),
+            )
+            for char in ("a", "b")
+        ]
+        event = QueueRetrieverResourcesEvent(retriever_resources=[*sources, sources[0]])
+        message_cycle_manager.handle_retriever_resources(event)
+        message_cycle_manager.handle_retriever_resources(event)
+        restored = TaskStateMetadata.model_validate_json(message_cycle_manager._task_state.metadata.model_dump_json())
+        assert [source.knowledge_fs_citation.id for source in restored.retriever_resources] == [
+            "kfs_" + "a" * 32,
+            "kfs_" + "b" * 32,
+        ]
+        assert [source.position for source in restored.retriever_resources] == [1, 2]
 
     def test_message_file_to_stream_response_uses_http_url_directly(self, message_cycle_manager, cycle_db: Session):
         """Use original URL when message file URL is already HTTP."""

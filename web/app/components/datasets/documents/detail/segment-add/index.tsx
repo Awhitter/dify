@@ -31,7 +31,7 @@ export function SegmentAdd({
   showBatchModal,
   embedding,
 }: SegmentAddProps) {
-  const { t } = useTranslation()
+  const { t } = useTranslation(['billing', 'datasetDocuments'])
   const [isPlanUpgradeModalOpen, setIsPlanUpgradeModalOpen] = useState(false)
   const deploymentEdition = useAtomValue(deploymentEditionAtom)
   const { data: plan } = useQuery(
@@ -152,7 +152,7 @@ export function SegmentAdd({
         >
           <span aria-hidden className={cn('i-ri-arrow-down-s-line size-4', textColor)} />
         </DropdownMenuTrigger>
-        <DropdownMenuContent placement="bottom-end" sideOffset={4} className="min-w-30">
+        <DropdownMenuContent className="min-w-30">
           <DropdownMenuItem
             className="system-md-regular"
             onClick={() => openSegmentDialog(showBatchModal)}

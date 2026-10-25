@@ -185,6 +185,7 @@ docker/volumes/minio/*
 docker/volumes/milvus/*
 docker/volumes/chroma/*
 docker/volumes/opensearch/data/*
+docker/volumes/openshell-mtls/*
 docker/volumes/myscale/data/*
 docker/volumes/myscale/log/*
 docker/volumes/unstructured/*
@@ -269,3 +270,6 @@ web/.vitest-reports/
 # dify-agent-runtime
 dify-agent-runtime/bin/
 dify-agent-runtime/.integration-state
+
+# Vercel deployment metadata and build cache
+.vercel/

@@ -1,18 +1,18 @@
 import importlib
 import json
 import sys
-import types
 from collections import UserDict
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.rag.datasource.vdb.vector_integration_test_support import FakeModule
 from core.rag.models.document import Document
 from models.dataset import Dataset
 
 
 def _build_fake_chroma_modules():
-    chroma = types.ModuleType("chromadb")
+    chroma = FakeModule("chromadb")
     chroma.DEFAULT_TENANT = "default_tenant"
     chroma.DEFAULT_DATABASE = "default_database"
 
@@ -190,8 +190,8 @@ def test_factory_init_vector_uses_existing_or_generated_collection(chroma_module
     monkeypatch.setattr(chroma_module.dify_config, "CHROMA_AUTH_CREDENTIALS", None)
 
     with patch.object(chroma_module, "ChromaVector", return_value="vector") as vector_cls:
-        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock())
-        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock())
+        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock(), session=None)
+        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock(), session=None)
 
     assert result_1 == "vector"
     assert result_2 == "vector"

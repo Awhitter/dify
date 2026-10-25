@@ -13,11 +13,10 @@ import {
 } from '@langgenius/dify-ui/dropdown-menu'
 import { RiArrowDownSLine } from '@remixicon/react'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ModelTypeEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import { useLanguage } from '@/app/components/header/account-setting/model-provider-page/hooks'
-import { renderI18nObject } from '@/i18n-config'
+import { renderI18nObject } from '@/i18n/metadata'
 import { consoleQuery } from '@/service/console'
 import ModelIcon from '../../header/account-setting/model-provider-page/model-icon'
 
@@ -31,7 +30,7 @@ const PublishWithMultipleModel: FC<PublishWithMultipleModelProps> = ({
   multipleModelConfigs,
   onSelect,
 }) => {
-  const { t } = useTranslation()
+  const { t } = useTranslation(['appDebug'])
   const language = useLanguage()
   const { data: textGenerationModelList = [] } = useQuery(
     consoleQuery.workspaces.current.models.modelTypes.byModelType.get.queryOptions({
@@ -39,7 +38,6 @@ const PublishWithMultipleModel: FC<PublishWithMultipleModelProps> = ({
       select: (response) => response.data,
     }),
   )
-  const [open, setOpen] = useState(false)
 
   const validModelConfigs: (ModelAndParameter & {
     modelItem: ProviderModelWithStatusEntity
@@ -68,7 +66,7 @@ const PublishWithMultipleModel: FC<PublishWithMultipleModelProps> = ({
   const triggerDisabled = disabled || !validModelConfigs.length
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu>
       <DropdownMenuTrigger
         disabled={triggerDisabled}
         render={<Button variant="primary" disabled={triggerDisabled} className="w-full" />}
@@ -78,7 +76,7 @@ const PublishWithMultipleModel: FC<PublishWithMultipleModelProps> = ({
           <RiArrowDownSLine className="size-3" />
         </>
       </DropdownMenuTrigger>
-      <DropdownMenuContent placement="bottom-end" sideOffset={4} className="w-[288px] p-1">
+      <DropdownMenuContent className="w-[288px] p-1">
         <div className="flex h-5.5 items-center px-3 text-xs font-medium text-text-tertiary">
           {t(($) => $.publishAs, { ns: 'appDebug' })}
         </div>

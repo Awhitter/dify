@@ -2,7 +2,7 @@
 
 These factories and lightweight builders are reused across the dataset,
 document, and segment service test modules that exercise
-``api/services/dataset_service.py``.
+``api/services/knowledge/dataset_service.py``.
 """
 
 import json
@@ -30,29 +30,8 @@ from models.dataset import (
     Document,
     DocumentSegment,
 )
+from models.enums import DataSourceType
 from models.model import UploadFile
-from services.dataset_service import (
-    DatasetCollectionBindingService,
-    DatasetPermissionService,
-    DatasetService,
-    DocumentService,
-    SegmentService,
-)
-from services.entities.knowledge_entities.knowledge_entities import (
-    ChildChunkUpdateArgs,
-    DataSource,
-    FileInfo,
-    InfoList,
-    KnowledgeConfig,
-    NotionIcon,
-    NotionInfo,
-    NotionPage,
-    ProcessRule,
-    RerankingModel,
-    RetrievalModel,
-    SegmentUpdateArgs,
-    WebsiteInfo,
-)
 from services.entities.knowledge_entities.rag_pipeline_entities import (
     IconInfo as PipelineIconInfo,
 )
@@ -66,11 +45,32 @@ from services.entities.knowledge_entities.rag_pipeline_entities import (
 from services.entities.knowledge_entities.rag_pipeline_entities import (
     RetrievalSetting as RagPipelineRetrievalSetting,
 )
-from services.errors.account import NoPermissionError
+from services.errors.base import NoPermissionError
 from services.errors.chunk import ChildChunkDeleteIndexError, ChildChunkIndexingError
 from services.errors.dataset import DatasetNameDuplicateError
 from services.errors.document import DocumentIndexingError
 from services.errors.file import FileNotExistsError
+from services.knowledge.dataset_service import (
+    DatasetCollectionBindingService,
+    DatasetPermissionService,
+    DatasetService,
+    DocumentService,
+    SegmentService,
+)
+from services.knowledge.entities.knowledge_entities import (
+    DataSource,
+    FileInfo,
+    InfoList,
+    KnowledgeConfig,
+    NotionIcon,
+    NotionInfo,
+    NotionPage,
+    ProcessRule,
+    RerankingModel,
+    RetrievalModel,
+    WebsiteInfo,
+)
+from services.knowledge.entities.segments import ChildChunkUpdateArgs, SegmentUpdateArgs
 
 __all__ = [
     "Account",
@@ -183,7 +183,6 @@ class DatasetServiceUnitDataFactory:
             chunk_structure=doc_form,
             enable_api=enable_api,
             updated_by=None,
-            updated_at=None,
             summary_index_setting=summary_index_setting,
             **kwargs,
         )
@@ -317,10 +316,11 @@ def _make_document(
     archived: bool = False,
     indexing_status: str = "completed",
 ) -> Document:
-    return Document(
+    document = Document(
         id=document_id,
         dataset_id=dataset_id,
         tenant_id=tenant_id,
+        position=1,
         batch=batch,
         doc_form=doc_form,
         word_count=word_count,
@@ -328,17 +328,19 @@ def _make_document(
         enabled=enabled,
         archived=archived,
         indexing_status=indexing_status,
-        data_source_type="upload_file",
+        data_source_type=DataSourceType("upload_file"),
         data_source_info="{}",
         completed_at=SimpleNamespace(),
         processing_started_at="started",
         parsing_completed_at="parsed",
         cleaning_completed_at="cleaned",
         splitting_completed_at="split",
-        updated_at=None,
         created_from=None,
+        created_by="user-1",
         dataset_process_rule_id="process-rule-1",
     )
+    document.updated_at = None  # type: ignore[assignment]
+    return document
 
 
 def _make_segment(

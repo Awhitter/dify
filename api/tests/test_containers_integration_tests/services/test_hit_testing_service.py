@@ -15,7 +15,7 @@ from core.rag.models.document import Document
 from core.rag.retrieval.retrieval_methods import RetrievalMethod
 from models.dataset import Dataset, DatasetQuery, DocumentSegment
 from models.dataset import Document as DatasetDocument
-from models.enums import DataSourceType, DocumentCreatedFrom, SegmentStatus
+from models.enums import DataSourceType, DocumentCreatedFrom, DocumentDocType, SegmentStatus
 from services.hit_testing_service import HitTestingService
 
 
@@ -105,12 +105,12 @@ def _create_dataset_document(
         tenant_id=tenant_id,
         dataset_id=dataset.id,
         position=1,
-        data_source_type=data_source_type,
+        data_source_type=DataSourceType(data_source_type),
         batch=f"batch-{uuid4()}",
         name=name,
         created_from=DocumentCreatedFrom.WEB,
         created_by=created_by,
-        doc_type=doc_type,
+        doc_type=DocumentDocType(doc_type) if doc_type else None,
         doc_metadata=doc_metadata,
     )
     db_session.add(document)
@@ -160,14 +160,14 @@ class TestHitTestingService:
         self, mock_format: MagicMock, db_session_with_containers: Session
     ) -> None:
         query = "test query"
-        mock_doc = MagicMock(spec=Document)
+        document = Document(page_content="Test document content")
 
         mock_record = MagicMock()
         mock_record.model_dump.return_value = {"content": "formatted content"}
         mock_format.return_value = [mock_record]
 
         response = _RetrieveResponse.model_validate(
-            HitTestingService.compact_retrieve_response(query, [mock_doc], session=db_session_with_containers)
+            HitTestingService.compact_retrieve_response(query, [document], session=db_session_with_containers)
         )
 
         assert response.query.content == query
@@ -175,7 +175,7 @@ class TestHitTestingService:
         assert response.records[0].content == "formatted content"
         mock_format.assert_called_once()
         assert mock_format.call_args.args[0] is not db_session_with_containers
-        assert mock_format.call_args.args[1] == [mock_doc]
+        assert mock_format.call_args.args[1] == [document]
 
     def test_compact_external_retrieve_response_should_return_records_for_external_provider(
         self, db_session_with_containers: Session
