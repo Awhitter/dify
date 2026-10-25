@@ -270,3 +270,6 @@ web/.vitest-reports/
 # dify-agent-runtime
 dify-agent-runtime/bin/
 dify-agent-runtime/.integration-state
+
+# Vercel deployment metadata and build cache
+.vercel/

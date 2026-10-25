@@ -26,6 +26,7 @@ const nonFrontendIgnores = [
 
 const generatedIgnores = [
   '**/.next/**',
+  '**/.vercel/**',
   '**/.vinext/**',
   '**/coverage/**',
   '**/dist/**',
