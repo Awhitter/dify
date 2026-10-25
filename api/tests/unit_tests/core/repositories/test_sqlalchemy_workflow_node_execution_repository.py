@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from configs import dify_config
+from core.repositories.celery_workflow_node_execution_repository import CeleryWorkflowNodeExecutionRepository
 from core.repositories.factory import OrderConfig
 from core.repositories.sqlalchemy_workflow_node_execution_repository import (
     SQLAlchemyWorkflowNodeExecutionRepository,
@@ -26,21 +27,23 @@ from core.repositories.sqlalchemy_workflow_node_execution_repository import (
     _find_first,
     _replace_or_append_offload,
 )
-from extensions.storage.storage_type import StorageType
+from core.workflow.node_execution_process_data import WORKFLOW_TOOL_ROOT_APP_ID_KEY
 from graphon.entities import WorkflowNodeExecution
 from graphon.enums import BuiltinNodeTypes, WorkflowNodeExecutionMetadataKey, WorkflowNodeExecutionStatus
-from models import Account, EndUser, Tenant
+from models import Account, EndUser
 from models.enums import CreatorUserRole, ExecutionOffLoadType
 from models.model import UploadFile
 from models.workflow import WorkflowNodeExecutionModel, WorkflowNodeExecutionOffload, WorkflowNodeExecutionTriggeredFrom
+from tests.unit_tests.model_factories import make_account, make_tenant, make_upload_file
 
 
 def _account(*, tenant_id: str = "tenant-1", user_id: str = "user-1") -> Account:
-    user = Account(name="Test Account", email="test@example.com")
-    user.id = user_id
-    user._current_tenant = Tenant(name="Test Tenant")
-    user._current_tenant.id = tenant_id
-    return user
+    return make_account(
+        account_id=user_id,
+        name="Test Account",
+        email="test@example.com",
+        tenant=make_tenant(tenant_id=tenant_id, name="Test Tenant"),
+    )
 
 
 def _end_user(*, tenant_id: str = "tenant-1", user_id: str = "end-user-1") -> EndUser:
@@ -48,18 +51,24 @@ def _end_user(*, tenant_id: str = "tenant-1", user_id: str = "end-user-1") -> En
 
 
 def _upload_file(*, key: str = "storage-key") -> UploadFile:
-    return UploadFile(
-        tenant_id="tenant-1",
-        storage_type=StorageType.LOCAL,
+    return make_upload_file(
         key=key,
         name="offload.json",
         size=1,
         extension="json",
         mime_type="application/json",
-        created_by_role=CreatorUserRole.ACCOUNT,
         created_by="user-1",
         created_at=datetime.now(UTC),
-        used=False,
+    )
+
+
+def _offload(type_: ExecutionOffLoadType, *, file_id: str = "file-1") -> WorkflowNodeExecutionOffload:
+    return WorkflowNodeExecutionOffload(
+        tenant_id="tenant-1",
+        app_id="app-1",
+        node_execution_id="execution-1",
+        type_=type_,
+        file_id=file_id,
     )
 
 
@@ -147,6 +156,29 @@ def test_init_accepts_real_engine_and_sessionmaker_and_sets_role(
     assert end_user_repo._creator_user_role.value == "end_user"
 
 
+@pytest.mark.parametrize("source_app", ["app-1", "source-app"])
+def test_workflow_tool_scope_isolates_execution_history_with_same_tenant_and_creator(
+    monkeypatch: pytest.MonkeyPatch, sqlite_session_factory: sessionmaker[Session], source_app: str
+) -> None:
+    caller = _repository(monkeypatch, sqlite_session_factory, user=_end_user())
+    source = caller.for_workflow_tool(source_app)
+    caller.save_synchronously(_execution(execution_id="caller", node_execution_id="caller"))
+    source.save_synchronously(_execution(execution_id="source", node_execution_id="source"))
+
+    assert [node.id for node in caller.get_by_workflow_execution("run-1")] == ["caller"]
+    assert [node.id for node in source.get_by_workflow_execution("run-1")] == ["source"]
+    with sqlite_session_factory() as session:
+        row = session.get(WorkflowNodeExecutionModel, "source")
+        assert row is not None
+        assert (row.tenant_id, row.app_id, row.created_by, row.created_by_role, row.triggered_from) == (
+            "tenant-1",
+            source_app,
+            "end-user-1",
+            CreatorUserRole.END_USER,
+            WorkflowNodeExecutionTriggeredFrom.WORKFLOW_TOOL,
+        )
+
+
 def test_init_rejects_invalid_factory_and_missing_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "core.repositories.sqlalchemy_workflow_node_execution_repository.FileService",
@@ -195,12 +227,10 @@ def test_helper_functions_and_truncator_configuration(
     assert _deterministic_json_dump({"b": 1, "a": 2}) == '{"a": 2, "b": 1}'
     assert _find_first([], lambda _value: True) is None
     assert _find_first([1, 2, 3], lambda value: value > 1) == 2
-    inputs = WorkflowNodeExecutionOffload(type_=ExecutionOffLoadType.INPUTS)
-    outputs = WorkflowNodeExecutionOffload(type_=ExecutionOffLoadType.OUTPUTS)
+    inputs = _offload(ExecutionOffLoadType.INPUTS)
+    outputs = _offload(ExecutionOffLoadType.OUTPUTS)
     assert _find_first([inputs, outputs], _filter_by_offload_type(ExecutionOffLoadType.OUTPUTS)) is outputs
-    replaced = _replace_or_append_offload(
-        [inputs, outputs], WorkflowNodeExecutionOffload(type_=ExecutionOffLoadType.INPUTS)
-    )
+    replaced = _replace_or_append_offload([inputs, outputs], _offload(ExecutionOffLoadType.INPUTS))
     assert [item.type_ for item in replaced] == [ExecutionOffLoadType.OUTPUTS, ExecutionOffLoadType.INPUTS]
 
     created: dict[str, int] = {}
@@ -310,7 +340,11 @@ def test_save_execution_data_updates_existing_and_creates_missing(
     repo = _repository(monkeypatch, sqlite_session_factory)
     existing = _execution(
         inputs={"initial": True},
-        process_data={"workflow_agent_binding_id": "binding-1"},
+        process_data={
+            "workflow_agent_binding_id": "binding-1",
+            "workflow_tool_invocation_id": "tool-call-1",
+            "workflow_tool_root_app_id": "root-app",
+        },
     )
     repo.save(existing)
     existing.inputs = {"updated": True}
@@ -326,6 +360,8 @@ def test_save_execution_data_updates_existing_and_creates_missing(
         assert persisted.process_data_dict == {
             "step": 3,
             "workflow_agent_binding_id": "binding-1",
+            "workflow_tool_invocation_id": "tool-call-1",
+            "workflow_tool_root_app_id": "root-app",
         }
 
     missing = _execution(execution_id="missing", node_execution_id="missing-node", inputs={"new": True})
@@ -445,6 +481,83 @@ def test_get_by_workflow_execution_maps_real_rows_to_domain(
     assert domains[0].outputs == {"output": 2}
 
 
+@pytest.mark.parametrize(
+    "repository_type", [SQLAlchemyWorkflowNodeExecutionRepository, CeleryWorkflowNodeExecutionRepository]
+)
+def test_resume_history_includes_paused_nodes_without_changing_default_reads(
+    sqlite_session_factory: sessionmaker[Session],
+    repository_type: type[SQLAlchemyWorkflowNodeExecutionRepository | CeleryWorkflowNodeExecutionRepository],
+) -> None:
+    user = _account()
+    writer = SQLAlchemyWorkflowNodeExecutionRepository(
+        sqlite_session_factory,
+        tenant_id="tenant-1",
+        user=user,
+        app_id="app-1",
+        triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
+    )
+    writer.save_synchronously(_execution(execution_id="finished", node_execution_id="finished"))
+    paused = _execution(execution_id="paused", node_execution_id="paused", status=WorkflowNodeExecutionStatus.PAUSED)
+    writer.save_synchronously(paused)
+    writer.for_workflow_tool("app-1").save_synchronously(
+        paused.model_copy(update={"id": "source-paused", "node_execution_id": "source-paused"})
+    )
+    reader = repository_type(
+        sqlite_session_factory,
+        tenant_id="tenant-1",
+        user=user,
+        app_id="app-1",
+        triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
+    )
+    source_reader = reader.for_workflow_tool("app-1")
+    assert {node.id for node in reader.get_by_workflow_execution("run-1")} == {"finished"}
+    assert source_reader.get_by_workflow_execution("run-1") == []
+    assert {node.id for node in reader.get_by_workflow_execution("run-1", include_paused=True)} == {
+        "finished",
+        "paused",
+    }
+    assert {node.id for node in source_reader.get_by_workflow_execution("run-1", include_paused=True)} == {
+        "source-paused"
+    }
+    assert {node.id for node in reader.get_by_workflow_execution("run-1")} == {"finished"}
+    assert source_reader.get_by_workflow_execution("run-1") == []
+
+
+def test_run_reads_keep_workflow_tool_internals_in_their_source_scope(
+    monkeypatch: pytest.MonkeyPatch, sqlite_session_factory: sessionmaker[Session]
+) -> None:
+    caller = _repository(monkeypatch, sqlite_session_factory)
+    caller.save(_execution(execution_id="root", node_execution_id="root"))
+    for execution_id, tenant_id, app_id, root_app_id, run_id, origin in (
+        ("child", "tenant-1", "source-app", "app-1", "run-1", WorkflowNodeExecutionTriggeredFrom.WORKFLOW_TOOL),
+        ("same-app", "tenant-1", "app-1", "app-1", "run-1", WorkflowNodeExecutionTriggeredFrom.WORKFLOW_TOOL),
+        ("foreign-root", "tenant-1", "source-app", "app-2", "run-1", WorkflowNodeExecutionTriggeredFrom.WORKFLOW_TOOL),
+        (
+            "foreign-tenant",
+            "tenant-2",
+            "source-app",
+            "app-1",
+            "run-1",
+            WorkflowNodeExecutionTriggeredFrom.WORKFLOW_TOOL,
+        ),
+        ("foreign-run", "tenant-1", "source-app", "app-1", "run-2", WorkflowNodeExecutionTriggeredFrom.WORKFLOW_TOOL),
+        ("foreign-app", "tenant-1", "source-app", "app-1", "run-1", WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN),
+    ):
+        _repository(
+            monkeypatch, sqlite_session_factory, tenant_id=tenant_id, app_id=app_id, triggered_from=origin
+        ).save(
+            _execution(
+                execution_id=execution_id,
+                node_execution_id=execution_id,
+                run_id=run_id,
+                process_data={WORKFLOW_TOOL_ROOT_APP_ID_KEY: root_app_id},
+            )
+        )
+    assert [node.id for node in caller.get_by_workflow_execution("run-1")] == ["root"]
+    source = caller.for_workflow_tool("source-app")
+    assert {node.id for node in source.get_by_workflow_execution("run-1")} == {"child", "foreign-root"}
+
+
 def test_to_domain_model_loads_offloaded_storage(
     monkeypatch: pytest.MonkeyPatch, sqlite_session_factory: sessionmaker[Session]
 ) -> None:
@@ -458,7 +571,7 @@ def test_to_domain_model_loads_offloaded_storage(
     )
     offloads = []
     for offload_type in ExecutionOffLoadType:
-        offload = WorkflowNodeExecutionOffload(type_=offload_type)
+        offload = _offload(offload_type)
         offload.file = _upload_file(key=offload_type.value)
         offloads.append(offload)
     db_model.offload_data = offloads
@@ -526,7 +639,7 @@ def test_duplicate_detection_and_id_regeneration(
     sqlite_session_factory: sessionmaker[Session],
 ) -> None:
     repo = _repository(monkeypatch, sqlite_session_factory)
-    duplicate = IntegrityError("duplicate", params=None, orig=Mock(spec=psycopg2.errors.UniqueViolation))
+    duplicate = IntegrityError("duplicate", params=None, orig=psycopg2.errors.UniqueViolation("duplicate key"))
     assert repo._is_duplicate_key_error(duplicate)
     assert not repo._is_duplicate_key_error(IntegrityError("other", params=None, orig=Exception("other")))
     execution = _execution(execution_id="old")
@@ -547,7 +660,7 @@ def test_save_retries_postgres_duplicate_key(
     duplicate = IntegrityError(
         "duplicate",
         params=None,
-        orig=Mock(spec=psycopg2.errors.UniqueViolation),
+        orig=psycopg2.errors.UniqueViolation("duplicate key"),
     )
     persist = Mock(side_effect=[duplicate, None])
     monkeypatch.setattr(repo, "_persist_to_database", persist)

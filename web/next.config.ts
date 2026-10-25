@@ -41,6 +41,7 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       { source: '/console/api/:path*', destination: `${API_PROXY_TARGET}/console/api/:path*` },
+      { source: '/openapi/:path*', destination: `${API_PROXY_TARGET}/openapi/:path*` },
       { source: '/api/:path*', destination: `${API_PROXY_TARGET}/api/:path*` },
       { source: '/v1/:path*', destination: `${API_PROXY_TARGET}/v1/:path*` },
       { source: '/files/:path*', destination: `${API_PROXY_TARGET}/files/:path*` },

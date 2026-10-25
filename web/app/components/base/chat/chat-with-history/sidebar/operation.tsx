@@ -33,7 +33,7 @@ const Operation: FC<Props> = ({
   isShowDelete,
   onDelete,
 }) => {
-  const { t } = useTranslation()
+  const { t } = useTranslation(['common', 'explore'])
   const handleDeferredAction = useCallback((action?: () => void) => {
     if (!action) return
     queueMicrotask(action)
@@ -46,7 +46,7 @@ const Operation: FC<Props> = ({
             aria-label={t(($) => $['operation.more'], { ns: 'common' })}
             data-active={isActive ? '' : undefined}
             className={cn(
-              'pointer-events-none opacity-0 data-active:bg-state-accent-active data-active:text-text-accent data-active:hover:bg-state-accent-active-alt data-popup-open:pointer-events-auto data-popup-open:bg-state-base-hover data-popup-open:opacity-100 data-active:data-popup-open:bg-state-accent-active data-active:data-popup-open:text-text-accent',
+              'pointer-events-none opacity-0 focus-visible:pointer-events-auto focus-visible:opacity-100 data-active:bg-state-accent-active data-active:text-text-accent data-active:hover:bg-state-accent-active-alt data-popup-open:pointer-events-auto data-popup-open:bg-state-base-hover data-popup-open:opacity-100 data-active:data-popup-open:bg-state-accent-active data-active:data-popup-open:text-text-accent',
               isItemHovering && 'pointer-events-auto opacity-100',
             )}
           >
@@ -55,12 +55,7 @@ const Operation: FC<Props> = ({
         }
         onClick={(e) => e.stopPropagation()}
       />
-      <DropdownMenuContent
-        placement="bottom-end"
-        sideOffset={4}
-        className="min-w-30"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <DropdownMenuContent className="min-w-30" onClick={(e) => e.stopPropagation()}>
         <DropdownMenuItem
           className="gap-2 px-2 system-md-regular"
           onClick={(e) => {

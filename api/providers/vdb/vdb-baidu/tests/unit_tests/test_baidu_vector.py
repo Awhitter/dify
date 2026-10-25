@@ -1,33 +1,33 @@
 import importlib
 import json
 import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.rag.datasource.vdb.vector_integration_test_support import FakeModule
 from core.rag.models.document import Document
 from models.dataset import Dataset
 
 
 def _build_fake_pymochow_modules():
-    pymochow = types.ModuleType("pymochow")
+    pymochow = FakeModule("pymochow")
     pymochow.__path__ = []
-    pymochow_auth = types.ModuleType("pymochow.auth")
+    pymochow_auth = FakeModule("pymochow.auth")
     pymochow_auth.__path__ = []
-    pymochow_credentials = types.ModuleType("pymochow.auth.bce_credentials")
-    pymochow_configuration = types.ModuleType("pymochow.configuration")
-    pymochow_exception = types.ModuleType("pymochow.exception")
-    pymochow_model = types.ModuleType("pymochow.model")
+    pymochow_credentials = FakeModule("pymochow.auth.bce_credentials")
+    pymochow_configuration = FakeModule("pymochow.configuration")
+    pymochow_exception = FakeModule("pymochow.exception")
+    pymochow_model = FakeModule("pymochow.model")
     pymochow_model.__path__ = []
-    pymochow_model_database = types.ModuleType("pymochow.model.database")
-    pymochow_model_enum = types.ModuleType("pymochow.model.enum")
-    pymochow_model_schema = types.ModuleType("pymochow.model.schema")
-    pymochow_model_table = types.ModuleType("pymochow.model.table")
+    pymochow_model_database = FakeModule("pymochow.model.database")
+    pymochow_model_enum = FakeModule("pymochow.model.enum")
+    pymochow_model_schema = FakeModule("pymochow.model.schema")
+    pymochow_model_table = FakeModule("pymochow.model.table")
 
     class _SimpleObject:
-        def __init__(self, *args, **kwargs):
+        def __init__[**P](self, *args: P.args, **kwargs: P.kwargs):
             self.args = args
             for key, value in kwargs.items():
                 setattr(self, key, value)
@@ -274,7 +274,7 @@ def test_factory_initializes_collection_name_and_index_struct(baidu_module, monk
     monkeypatch.setattr(baidu_module.dify_config, "BAIDU_VECTOR_DB_REBUILD_INDEX_TIMEOUT_IN_SECONDS", 300)
 
     with patch.object(baidu_module, "BaiduVector", return_value="vector") as vector_cls:
-        result = factory.init_vector(dataset, attributes=[], embeddings=MagicMock())
+        result = factory.init_vector(dataset, attributes=[], embeddings=MagicMock(), session=None)
 
     assert result == "vector"
     assert vector_cls.call_args.kwargs["collection_name"] == "auto_collection"
@@ -547,7 +547,7 @@ def test_factory_uses_existing_collection_prefix_when_index_struct_exists(
     monkeypatch.setattr(baidu_module.dify_config, "BAIDU_VECTOR_DB_REBUILD_INDEX_TIMEOUT_IN_SECONDS", 300)
 
     with patch.object(baidu_module, "BaiduVector", return_value="vector") as vector_cls:
-        result = factory.init_vector(dataset, attributes=[], embeddings=MagicMock())
+        result = factory.init_vector(dataset, attributes=[], embeddings=MagicMock(), session=None)
 
     assert result == "vector"
     assert vector_cls.call_args.kwargs["collection_name"] == "existing_collection"

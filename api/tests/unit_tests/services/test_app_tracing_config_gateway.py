@@ -1,9 +1,11 @@
-from unittest.mock import patch
+from functools import partial
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationInfo, field_validator
 
-from core.ops.entities.config_entity import BaseTracingConfig
+from core.ops.entities.config_entity import BaseTracingConfig, TracingProviderEnum
+from core.ops.exceptions import TraceProviderNotInstalledError
 from core.ops.ops_trace_manager import TracingProviderConfigEntry
 from services import app_tracing_config_gateway as gateway_module
 from services.app_tracing_config_gateway import OpsTraceManagerGateway
@@ -11,6 +13,7 @@ from services.app_tracing_config_service import (
     AppTracingConfigInvalidConfigurationError,
     AppTracingConfigInvalidProviderError,
     AppTracingConfigProcessingError,
+    AppTracingConfigProviderUnavailableError,
     AppTracingConfigVerificationFailedError,
 )
 
@@ -45,11 +48,68 @@ def test_validate_provider_rejects_unknown_provider(monkeypatch: pytest.MonkeyPa
         OpsTraceManagerGateway().validate_provider("unknown")
 
 
+@pytest.mark.parametrize("provider", TracingProviderEnum)
+def test_validate_provider_does_not_load_optional_dependencies(provider: TracingProviderEnum) -> None:
+    with patch.object(OpsTraceManagerGateway, "_provider_config") as load_provider:
+        OpsTraceManagerGateway().validate_provider(provider.value)
+
+    load_provider.assert_not_called()
+
+
+def test_require_provider_available_loads_provider_dependencies() -> None:
+    with patch.object(OpsTraceManagerGateway, "_provider_config") as load_provider:
+        OpsTraceManagerGateway().require_provider_available("weave")
+
+    load_provider.assert_called_once_with("weave")
+
+
+def test_require_provider_available_reports_missing_dependency() -> None:
+    unavailable = AppTracingConfigProviderUnavailableError()
+    with (
+        patch.object(OpsTraceManagerGateway, "_provider_config", side_effect=unavailable),
+        pytest.raises(AppTracingConfigProviderUnavailableError) as caught,
+    ):
+        OpsTraceManagerGateway().require_provider_available("weave")
+
+    assert caught.value is unavailable
+
+
+@pytest.mark.parametrize("update", [False, True])
+def test_prepare_config_reports_missing_provider_dependencies(monkeypatch: pytest.MonkeyPatch, update: bool) -> None:
+    missing_dependency = TraceProviderNotInstalledError("weave", "wandb")
+    providers = MagicMock()
+    providers.__getitem__.side_effect = missing_dependency
+    monkeypatch.setattr(gateway_module, "provider_config_map", providers)
+    gateway = OpsTraceManagerGateway()
+    prepare = (
+        partial(gateway.prepare_updated_config, current_tracing_config={}) if update else gateway.prepare_new_config
+    )
+
+    with pytest.raises(AppTracingConfigProviderUnavailableError) as caught:
+        prepare(workspace_id="workspace-1", tracing_provider="weave", tracing_config={})
+
+    assert caught.value.__cause__ is missing_dependency
+
+
+def test_present_config_reports_missing_provider_dependencies() -> None:
+    missing_dependency = TraceProviderNotInstalledError("weave", "wandb")
+    with patch.object(gateway_module, "OpsTraceManager") as manager:
+        manager.decrypt_tracing_config.side_effect = missing_dependency
+
+        with pytest.raises(AppTracingConfigProviderUnavailableError) as caught:
+            OpsTraceManagerGateway().present_config(
+                workspace_id="workspace-1", tracing_provider="weave", tracing_config={"api_key": "encrypted"}
+            )
+
+    assert caught.value.__cause__ is missing_dependency
+    manager.obfuscated_decrypt_token.assert_not_called()
+
+
 def test_prepare_new_config_applies_defaults_validates_and_encrypts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         gateway_module,
         "provider_config_map",
-        {"arize": _provider_entry(other_keys=["endpoint", "project"])},
+        {"langsmith": _provider_entry(other_keys=["endpoint", "project"])},
     )
     submitted = {"api_key": "plain", "endpoint": "", "project": ""}
 
@@ -60,7 +120,7 @@ def test_prepare_new_config_applies_defaults_validates_and_encrypts(monkeypatch:
 
         result = OpsTraceManagerGateway().prepare_new_config(
             workspace_id="workspace-1",
-            tracing_provider="arize",
+            tracing_provider="langsmith",
             tracing_config=submitted,
         )
 
@@ -71,14 +131,14 @@ def test_prepare_new_config_applies_defaults_validates_and_encrypts(monkeypatch:
     }
     assert submitted == {"api_key": "plain", "endpoint": "", "project": ""}
     assert result == {"api_key": "encrypted", "project_url": "https://project.example.com"}
-    manager.check_trace_config_is_effective.assert_called_once_with(normalized, "arize")
-    manager.encrypt_tracing_config.assert_called_once_with("workspace-1", "arize", normalized)
+    manager.check_trace_config_is_effective.assert_called_once_with(normalized, "langsmith")
+    manager.encrypt_tracing_config.assert_called_once_with("workspace-1", "langsmith", normalized)
 
 
 def test_prepare_new_config_reports_failed_verification_before_encryption(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
 
     with patch.object(gateway_module, "OpsTraceManager") as manager:
         manager.check_trace_config_is_effective.return_value = False
@@ -86,7 +146,7 @@ def test_prepare_new_config_reports_failed_verification_before_encryption(
         with pytest.raises(AppTracingConfigVerificationFailedError):
             OpsTraceManagerGateway().prepare_new_config(
                 workspace_id="workspace-1",
-                tracing_provider="arize",
+                tracing_provider="langsmith",
                 tracing_config={"api_key": "plain"},
             )
 
@@ -96,7 +156,7 @@ def test_prepare_new_config_reports_failed_verification_before_encryption(
 def test_prepare_new_config_keeps_success_when_project_url_lookup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
 
     with patch.object(gateway_module, "OpsTraceManager") as manager:
         manager.check_trace_config_is_effective.return_value = True
@@ -105,7 +165,7 @@ def test_prepare_new_config_keeps_success_when_project_url_lookup_fails(
 
         result = OpsTraceManagerGateway().prepare_new_config(
             workspace_id="workspace-1",
-            tracing_provider="arize",
+            tracing_provider="langsmith",
             tracing_config={"api_key": "plain"},
         )
 
@@ -132,7 +192,7 @@ def test_prepare_new_langfuse_config_builds_project_url(monkeypatch: pytest.Monk
 def test_prepare_new_config_reports_provider_check_exception_as_failed_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
 
     with patch.object(gateway_module, "OpsTraceManager") as manager:
         manager.check_trace_config_is_effective.side_effect = ValueError("verification failed")
@@ -140,7 +200,7 @@ def test_prepare_new_config_reports_provider_check_exception_as_failed_verificat
         with pytest.raises(AppTracingConfigVerificationFailedError) as caught:
             OpsTraceManagerGateway().prepare_new_config(
                 workspace_id="workspace-1",
-                tracing_provider="arize",
+                tracing_provider="langsmith",
                 tracing_config={},
             )
 
@@ -150,7 +210,7 @@ def test_prepare_new_config_reports_provider_check_exception_as_failed_verificat
 def test_prepare_new_config_propagates_unexpected_verification_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
     failure = RuntimeError("unexpected provider bug")
 
     with patch.object(gateway_module, "OpsTraceManager") as manager:
@@ -159,7 +219,7 @@ def test_prepare_new_config_propagates_unexpected_verification_failure(
         with pytest.raises(RuntimeError) as caught:
             OpsTraceManagerGateway().prepare_new_config(
                 workspace_id="workspace-1",
-                tracing_provider="arize",
+                tracing_provider="langsmith",
                 tracing_config={},
             )
 
@@ -170,13 +230,13 @@ def test_prepare_new_config_propagates_unexpected_verification_failure(
 def test_prepare_new_config_rejects_invalid_schema_before_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
 
     with patch.object(gateway_module, "OpsTraceManager") as manager:
         with pytest.raises(AppTracingConfigInvalidConfigurationError):
             OpsTraceManagerGateway().prepare_new_config(
                 workspace_id="workspace-1",
-                tracing_provider="arize",
+                tracing_provider="langsmith",
                 tracing_config={"endpoint": {"invalid": "value"}},
             )
 
@@ -185,7 +245,7 @@ def test_prepare_new_config_rejects_invalid_schema_before_verification(
 
 
 def test_prepare_new_config_reports_encryption_failure_as_processing_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
     failure = RuntimeError("key provider unavailable")
 
     with patch.object(gateway_module, "OpsTraceManager") as manager:
@@ -196,7 +256,7 @@ def test_prepare_new_config_reports_encryption_failure_as_processing_error(monke
         with pytest.raises(AppTracingConfigProcessingError) as caught:
             OpsTraceManagerGateway().prepare_new_config(
                 workspace_id="workspace-1",
-                tracing_provider="arize",
+                tracing_provider="langsmith",
                 tracing_config={},
             )
 
@@ -206,7 +266,7 @@ def test_prepare_new_config_reports_encryption_failure_as_processing_error(monke
 def test_prepare_updated_config_preserves_masked_secret_from_current_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
     submitted = {"api_key": "******", "project": "new-project"}
     current = {"api_key": "old-encrypted", "project": "old-project"}
     encrypted = {"api_key": "old-encrypted", "project": "new-project"}
@@ -216,29 +276,48 @@ def test_prepare_updated_config_preserves_masked_secret_from_current_config(
         manager.encrypt_tracing_config.return_value = encrypted
         manager.decrypt_tracing_config.return_value = decrypted
         manager.check_trace_config_is_effective.return_value = True
+        manager.get_trace_config_project_url.return_value = "https://example.com/project/new"
 
         result = OpsTraceManagerGateway().prepare_updated_config(
             workspace_id="workspace-1",
-            tracing_provider="arize",
+            tracing_provider="langsmith",
             tracing_config=submitted,
             current_tracing_config=current,
         )
 
     assert result == encrypted
+    assert result["project_url"] == "https://example.com/project/new"
     assert submitted == {"api_key": "******", "project": "new-project"}
-    manager.encrypt_tracing_config.assert_called_once_with("workspace-1", "arize", submitted, current)
-    manager.decrypt_tracing_config.assert_called_once_with("workspace-1", "arize", encrypted)
-    manager.check_trace_config_is_effective.assert_called_once_with(decrypted, "arize")
+    manager.encrypt_tracing_config.assert_called_once_with("workspace-1", "langsmith", submitted, current)
+    manager.decrypt_tracing_config.assert_called_once_with("workspace-1", "langsmith", encrypted)
+    manager.check_trace_config_is_effective.assert_called_once_with(decrypted, "langsmith")
+    manager.get_trace_config_project_url.assert_called_once_with(decrypted, "langsmith")
+
+
+def test_updated_destination_drops_old_project_when_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
+    with patch.object(gateway_module, "OpsTraceManager") as manager:
+        manager.encrypt_tracing_config.return_value = {"api_key": "encrypted", "project": "new-project"}
+        manager.decrypt_tracing_config.return_value = {"api_key": "plain", "project": "new-project"}
+        manager.check_trace_config_is_effective.return_value = True
+        manager.get_trace_config_project_url.side_effect = RuntimeError("metadata unavailable")
+        result = OpsTraceManagerGateway().prepare_updated_config(
+            workspace_id="workspace-1",
+            tracing_provider="langsmith",
+            tracing_config={"project": "new-project"},
+            current_tracing_config={"project_url": "https://example.com/project/old", "api_key": "encrypted"},
+        )
+    assert "project_url" not in result
 
 
 def test_prepare_updated_config_validates_schema_before_encryption(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
 
     with patch.object(gateway_module, "OpsTraceManager") as manager:
         with pytest.raises(AppTracingConfigInvalidConfigurationError):
             OpsTraceManagerGateway().prepare_updated_config(
                 workspace_id="workspace-1",
-                tracing_provider="arize",
+                tracing_provider="langsmith",
                 tracing_config={"endpoint": {"invalid": "value"}},
                 current_tracing_config={"api_key": "old-encrypted"},
             )
@@ -251,7 +330,7 @@ def test_prepare_updated_config_validates_schema_before_encryption(monkeypatch: 
 def test_prepare_updated_config_reports_decryption_failure_as_processing_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gateway_module, "provider_config_map", {"arize": _provider_entry()})
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
     failure = RuntimeError("stored credential cannot be decrypted")
 
     with patch.object(gateway_module, "OpsTraceManager") as manager:
@@ -261,7 +340,7 @@ def test_prepare_updated_config_reports_decryption_failure_as_processing_error(
         with pytest.raises(AppTracingConfigProcessingError) as caught:
             OpsTraceManagerGateway().prepare_updated_config(
                 workspace_id="workspace-1",
-                tracing_provider="arize",
+                tracing_provider="langsmith",
                 tracing_config={"project": "new-project"},
                 current_tracing_config={"api_key": "old-encrypted"},
             )
@@ -273,20 +352,20 @@ def test_prepare_updated_config_reports_decryption_failure_as_processing_error(
 @pytest.mark.parametrize(
     ("provider", "fallback_url"),
     [
-        ("arize", "https://app.arize.com/"),
-        ("phoenix", "https://app.phoenix.arize.com/projects/"),
+        ("arize", None),
+        ("phoenix", "https://app.phoenix.arize.com/redirects/projects/default"),
         ("langsmith", "https://smith.langchain.com/"),
         ("opik", "https://www.comet.com/opik/"),
         ("weave", "https://wandb.ai/"),
-        ("aliyun", "https://arms.console.aliyun.com/"),
+        ("aliyun", "https://arms.console.aliyun.com/#/llm"),
         ("tencent", "https://console.cloud.tencent.com/apm"),
-        ("mlflow", "http://localhost:5000/"),
+        ("mlflow", "http://localhost:5000/#/experiments/0/traces"),
         ("databricks", "https://www.databricks.com/"),
     ],
 )
 def test_present_config_uses_provider_fallback_when_project_lookup_fails(
     provider: str,
-    fallback_url: str,
+    fallback_url: str | None,
 ) -> None:
     with patch.object(gateway_module, "OpsTraceManager") as manager:
         decrypted_config: dict[str, object] = {}
@@ -301,7 +380,11 @@ def test_present_config_uses_provider_fallback_when_project_lookup_fails(
             tracing_config={"encrypted": "config"},
         )
 
-    assert result == {"project_url": fallback_url}
+        assert result == {"project_url": fallback_url}
+        if provider in {"arize", "aliyun", "mlflow", "phoenix"}:
+            # Provider defaults produce a pure link; the failing legacy lookup is
+            # deliberately not reached, even when no cached URL is present.
+            manager.get_trace_config_project_url.assert_not_called()
 
 
 def test_present_langfuse_config_builds_project_url() -> None:
@@ -338,7 +421,7 @@ def test_present_config_rejects_missing_stored_config() -> None:
     with pytest.raises(AppTracingConfigProcessingError, match="processing failed"):
         OpsTraceManagerGateway().present_config(
             workspace_id="workspace-1",
-            tracing_provider="arize",
+            tracing_provider="langsmith",
             tracing_config=None,
         )
 
@@ -352,9 +435,40 @@ def test_present_config_reports_decryption_failure_as_processing_error() -> None
         with pytest.raises(AppTracingConfigProcessingError) as caught:
             OpsTraceManagerGateway().present_config(
                 workspace_id="workspace-1",
-                tracing_provider="arize",
+                tracing_provider="langsmith",
                 tracing_config={"encrypted": "config"},
             )
 
     assert caught.value.__cause__ is failure
     manager.obfuscated_decrypt_token.assert_not_called()
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_validate_saved_config_decrypts_and_validates_without_vendor_io(
+    monkeypatch: pytest.MonkeyPatch, malformed: bool
+) -> None:
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
+    with patch.object(gateway_module, "OpsTraceManager") as manager:
+        manager.decrypt_tracing_config.return_value = {"project": ["invalid-project"] if malformed else "saved-project"}
+        gateway = OpsTraceManagerGateway()
+        if malformed:
+            with pytest.raises(AppTracingConfigInvalidConfigurationError):
+                gateway.validate_saved_config(
+                    workspace_id="workspace", tracing_provider="langsmith", tracing_config={"api_key": "encrypted"}
+                )
+        else:
+            gateway.validate_saved_config(
+                workspace_id="workspace", tracing_provider="langsmith", tracing_config={"api_key": "encrypted"}
+            )
+        manager.decrypt_tracing_config.assert_called_once_with("workspace", "langsmith", {"api_key": "encrypted"})
+        manager.check_trace_config_is_effective.assert_not_called()
+
+
+def test_validate_saved_config_rejects_undecryptable_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gateway_module, "provider_config_map", {"langsmith": _provider_entry()})
+    with patch.object(gateway_module, "OpsTraceManager") as manager:
+        manager.decrypt_tracing_config.side_effect = ValueError("invalid ciphertext")
+        with pytest.raises(AppTracingConfigProcessingError):
+            OpsTraceManagerGateway().validate_saved_config(
+                workspace_id="workspace", tracing_provider="langsmith", tracing_config={"api_key": "broken"}
+            )

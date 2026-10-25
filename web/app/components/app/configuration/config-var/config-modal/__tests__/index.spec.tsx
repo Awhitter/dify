@@ -1,24 +1,23 @@
 import type { InputVar } from '@/app/components/workflow/types'
-import type { App, AppSSO } from '@/types/app'
-import { fireEvent, screen } from '@testing-library/react'
+import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as React from 'react'
 import { toast } from '@/app/components/app/configuration/toast'
-import { useStore } from '@/app/components/app/store'
 import { InputVarType, SupportUploadFileTypes } from '@/app/components/workflow/types'
-import { commonQueryKeys } from '@/service/use-common'
-import { renderWithConsoleQuery as render } from '@/test/console/query-data'
-import { AppModeEnum, TransferMethod } from '@/types/app'
+import { consoleQuery } from '@/service/console'
+import {
+  createConsoleQueryClient,
+  renderWithConsoleQuery,
+  seedAppDetail,
+} from '@/test/console/query-data'
+import { createAppDetailFixture } from '@/test/fixtures/app'
+import { createFileUploadConfigFixture } from '@/test/fixtures/file-upload-config'
+import { TransferMethod } from '@/types/app'
 import ConfigModal from '../index'
 
-vi.mock('next/navigation', async () => ({
-  ...(await vi.importActual<typeof import('next/navigation')>('next/navigation')),
-  useParams: () => ({}),
-}))
-
-vi.mock('@/service/use-common', async () => ({
-  ...(await vi.importActual<typeof import('@/service/use-common')>('@/service/use-common')),
-  useFileUploadConfig: () => ({ data: undefined }),
+vi.mock('@/next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/next/navigation')>()),
+  useParams: () => ({ appId: 'app-1' }),
 }))
 
 vi.mock('@monaco-editor/react', async () => ({
@@ -32,7 +31,24 @@ vi.mock('@monaco-editor/react', async () => ({
   ),
 }))
 
+const render = (ui: React.ReactElement) => {
+  const queryClient = createConsoleQueryClient()
+  seedAppDetail(queryClient, createAppDetailFixture({ id: 'app-1', mode: 'chat' as const }))
+  // Upload limits stay pending unless a case seeds them.
+  void queryClient.query({
+    queryKey: consoleQuery.files.upload.get.queryKey(),
+    queryFn: () => new Promise(() => {}),
+  })
+  return renderWithConsoleQuery(ui, { queryClient })
+}
+
 const toastErrorSpy = vi.spyOn(toast, 'error').mockReturnValue('toast-error')
+
+const expectDescribedByLastError = (element: HTMLElement) => {
+  const message = toastErrorSpy.mock.lastCall?.[0]
+  if (typeof message !== 'string') throw new Error('Expected an error message')
+  expect(element).toHaveAccessibleDescription(message)
+}
 
 const createPayload = (overrides: Partial<InputVar> = {}): InputVar => ({
   type: InputVarType.textInput,
@@ -49,31 +65,38 @@ const createPayload = (overrides: Partial<InputVar> = {}): InputVar => ({
 describe('ConfigModal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useStore.setState({
-      appDetail: {
-        mode: AppModeEnum.CHAT,
-      } as App & Partial<AppSSO>,
-    })
   })
 
-  it('should copy the variable name into the label when the label is empty', () => {
+  it('rejects invalid variable characters and keeps an explicitly edited label on blur', async () => {
+    const user = userEvent.setup()
+    const onConfirm = vi.fn()
     render(
       <ConfigModal
-        isCreate
         isShow
-        payload={createPayload()}
+        isCreate
+        payload={createPayload({ label: 'Existing label' })}
         onClose={vi.fn()}
-        onConfirm={vi.fn()}
+        onConfirm={onConfirm}
       />,
     )
-
-    const textboxes = screen.getAllByRole('textbox')
-    fireEvent.blur(textboxes[0]!, { target: { value: 'question' } })
-
-    expect(textboxes[1])!.toHaveValue('question')
+    const variable = screen.getByRole('textbox', { name: 'appDebug.variableConfig.varName' })
+    await user.clear(variable)
+    await user.type(variable, 'renamed!')
+    await user.tab()
+    expect(variable).toHaveValue('renamed')
+    expect(toastErrorSpy).toHaveBeenCalled()
+    expect(screen.getByRole('textbox', { name: 'appDebug.variableConfig.labelName' })).toHaveValue(
+      'Existing label',
+    )
+    await user.click(screen.getByRole('button', { name: 'common.operation.save' }))
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ variable: 'renamed', label: 'Existing label' }),
+      { type: 'changeVarName', payload: { beforeKey: 'question', afterKey: 'renamed' } },
+    )
   })
 
-  it('should submit the edited payload when the form is valid', () => {
+  it('should submit the edited payload when the form is valid', async () => {
+    const user = userEvent.setup()
     const onConfirm = vi.fn()
     render(
       <ConfigModal
@@ -85,8 +108,12 @@ describe('ConfigModal', () => {
       />,
     )
 
-    fireEvent.change(screen.getByDisplayValue('hello'), { target: { value: 'updated default' } })
-    fireEvent.click(screen.getByRole('button', { name: 'common.operation.save' }))
+    const defaultInput = screen.getByRole('textbox', {
+      name: 'appDebug.variableConfig.defaultValue',
+    })
+    await user.clear(defaultInput)
+    await user.type(defaultInput, 'updated default')
+    await user.click(screen.getByRole('button', { name: 'common.operation.save' }))
 
     expect(onConfirm).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -117,9 +144,9 @@ describe('ConfigModal', () => {
     expect(screen.getByRole('textbox', { name: 'appDebug.variableConfig.labelName' })).toHaveValue(
       'Question',
     )
-    expect(
-      screen.getByRole('spinbutton', { name: 'appDebug.variableConfig.maxLength' }),
-    ).toHaveValue(32)
+    expect(screen.getByRole('textbox', { name: 'appDebug.variableConfig.maxLength' })).toHaveValue(
+      '32',
+    )
     const defaultInput = screen.getByRole('textbox', {
       name: 'appDebug.variableConfig.defaultValue',
     })
@@ -129,6 +156,155 @@ describe('ConfigModal', () => {
     expect(onConfirm).toHaveBeenCalledTimes(1)
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ default: 'hello' }), undefined)
   })
+
+  it('should normalize spaces in the variable name and fill an empty label on blur', async () => {
+    const user = userEvent.setup()
+    render(
+      <ConfigModal
+        isShow
+        payload={createPayload({ variable: '', label: '' })}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    )
+
+    const variable = screen.getByRole('textbox', { name: 'appDebug.variableConfig.varName' })
+    await user.type(variable, 'search query')
+    await user.tab()
+
+    expect(variable).toHaveValue('search_query')
+    expect(screen.getByRole('textbox', { name: 'appDebug.variableConfig.labelName' })).toHaveValue(
+      'search_query',
+    )
+  })
+
+  it.each(['0', 0])(
+    'should edit a numeric default initialized from %s without losing decimal precision',
+    async (initialDefault) => {
+      const user = userEvent.setup()
+      const onConfirm = vi.fn()
+      render(
+        <ConfigModal
+          isShow
+          payload={createPayload({
+            type: InputVarType.number,
+            label: 'Amount',
+            default: initialDefault,
+          })}
+          onClose={vi.fn()}
+          onConfirm={onConfirm}
+        />,
+      )
+
+      const input = screen.getByRole('textbox', { name: 'appDebug.variableConfig.defaultValue' })
+      expect(input).toHaveValue('0')
+      await user.click(screen.getByText('appDebug.variableConfig.defaultValue'))
+      expect(input).toHaveFocus()
+      await user.clear(input)
+      await user.type(input, '-7.123456')
+      await user.tab()
+      expect(input).toHaveValue('-7.123456')
+      await user.click(input)
+      await user.keyboard('{Enter}')
+
+      expect(onConfirm).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ default: -7.123456 }),
+        undefined,
+      )
+    },
+  )
+
+  it.each([
+    { option: 'appDebug.variableConfig.text-input string', type: InputVarType.textInput },
+    { option: 'appDebug.variableConfig.paragraph string', type: InputVarType.paragraph },
+  ])('should preserve a numeric default when switching to $type', async ({ option, type }) => {
+    const user = userEvent.setup()
+    const onConfirm = vi.fn()
+    render(
+      <ConfigModal
+        isShow
+        payload={createPayload({ type: InputVarType.number, label: 'Amount', default: -7.123456 })}
+        onClose={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    )
+
+    await user.click(screen.getByRole('combobox', { name: 'appDebug.variableConfig.fieldType' }))
+    await user.click(await screen.findByRole('option', { name: option }))
+    expect(
+      screen.getByRole('textbox', { name: 'appDebug.variableConfig.defaultValue' }),
+    ).toHaveValue('-7.123456')
+    await user.click(screen.getByRole('button', { name: 'common.operation.save' }))
+
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type, default: '-7.123456' }),
+      undefined,
+    )
+  })
+
+  it.each([
+    { initialDefault: '0', expected: 0, displayed: '0' },
+    { initialDefault: 'hello', expected: undefined, displayed: '' },
+  ])(
+    'should use a numeric or absent default when switching from "$initialDefault" to number',
+    async ({ initialDefault, expected, displayed }) => {
+      const user = userEvent.setup()
+      const onConfirm = vi.fn()
+      render(
+        <ConfigModal
+          isShow
+          payload={createPayload({ label: 'Question', default: initialDefault })}
+          onClose={vi.fn()}
+          onConfirm={onConfirm}
+        />,
+      )
+
+      await user.click(screen.getByRole('combobox', { name: 'appDebug.variableConfig.fieldType' }))
+      await user.click(
+        await screen.findByRole('option', { name: 'appDebug.variableConfig.number number' }),
+      )
+      expect(
+        screen.getByRole('textbox', { name: 'appDebug.variableConfig.defaultValue' }),
+      ).toHaveValue(displayed)
+      await user.click(screen.getByRole('button', { name: 'common.operation.save' }))
+
+      expect(onConfirm).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ type: InputVarType.number, default: expected }),
+        undefined,
+      )
+    },
+  )
+
+  it.each([InputVarType.textInput, InputVarType.number])(
+    'should save an absent %s default after clearing it',
+    async (type) => {
+      const user = userEvent.setup()
+      const onConfirm = vi.fn()
+      render(
+        <ConfigModal
+          isShow
+          payload={createPayload({
+            type,
+            label: 'Question',
+            default: type === InputVarType.number ? 9 : 'hello',
+          })}
+          onClose={vi.fn()}
+          onConfirm={onConfirm}
+        />,
+      )
+
+      const input = screen.getByRole('textbox', { name: 'appDebug.variableConfig.defaultValue' })
+      await user.clear(input)
+      await user.tab()
+      expect(input).toHaveValue('')
+      await user.click(screen.getByRole('button', { name: 'common.operation.save' }))
+
+      expect(onConfirm).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ default: undefined }),
+        undefined,
+      )
+    },
+  )
 
   it.each([InputVarType.singleFile, InputVarType.multiFiles])(
     'should keep the %s configuration open when Enter adds custom extensions',
@@ -234,15 +410,18 @@ describe('ConfigModal', () => {
         onConfirm={onConfirm}
       />,
     )
-    queryClient.setQueryData(commonQueryKeys.fileUploadConfig, {
-      batch_count_limit: 5,
-      image_file_batch_limit: 10,
-      single_chunk_attachment_limit: 10,
-      attachment_image_file_size_limit: 2,
-      file_size_limit: 15,
-      file_upload_limit: 5,
-      workflow_file_upload_limit: 3,
-    })
+    queryClient.setQueryData(
+      consoleQuery.files.upload.get.queryKey(),
+      createFileUploadConfigFixture({
+        batch_count_limit: 5,
+        image_file_batch_limit: 10,
+        single_chunk_attachment_limit: 10,
+        attachment_image_file_size_limit: 2,
+        file_size_limit: 15,
+        file_upload_limit: 5,
+        workflow_file_upload_limit: 3,
+      }),
+    )
 
     await user.click(screen.getByRole('button', { name: 'common.operation.save' }))
 
@@ -274,7 +453,7 @@ describe('ConfigModal', () => {
       await user.click(save)
       expect(input).toHaveFocus()
       expect(input).toBeInvalid()
-      expect(input).toHaveAccessibleDescription(toastErrorSpy.mock.lastCall![0])
+      expectDescribedByLastError(input)
       expect(onConfirm).not.toHaveBeenCalled()
 
       // Repeated invalid submissions must restore focus as well.
@@ -313,7 +492,7 @@ describe('ConfigModal', () => {
         : screen.getByRole('button', { name: 'appDebug.variableConfig.addOption' })
       expect(control).toHaveFocus()
       expect(control).toHaveAttribute('aria-invalid', 'true')
-      expect(control).toHaveAccessibleDescription(toastErrorSpy.mock.lastCall![0])
+      expectDescribedByLastError(control)
       expect(onConfirm).not.toHaveBeenCalled()
     },
   )
@@ -351,7 +530,7 @@ describe('ConfigModal', () => {
       const control = screen.getByRole(role, { name })
       expect(control).toHaveFocus()
       expect(control).toHaveAttribute('aria-invalid', 'true')
-      expect(control).toHaveAccessibleDescription(toastErrorSpy.mock.lastCall![0])
+      expectDescribedByLastError(control)
       expect(onConfirm).not.toHaveBeenCalled()
 
       if (role === 'textbox') await user.type(control, '.csv{Enter}')
@@ -444,40 +623,5 @@ describe('ConfigModal', () => {
 
     expect(onClose).toHaveBeenCalledOnce()
     expect(onConfirm).not.toHaveBeenCalled()
-  })
-
-  it('should keep scrolling inside the form body so scrollbars do not cover dialog corners', () => {
-    render(
-      <ConfigModal
-        isCreate
-        isShow
-        payload={createPayload({ label: 'Question' })}
-        onClose={vi.fn()}
-        onConfirm={vi.fn()}
-      />,
-    )
-
-    const dialog = screen.getByRole('dialog')
-    const scrollArea = screen.getByTestId('config-modal-scroll-area')
-
-    expect(dialog).toHaveClass('overflow-hidden!')
-    expect(scrollArea).toHaveClass('overflow-y-auto')
-    expect(scrollArea).toHaveClass('overflow-x-hidden')
-  })
-
-  it('should block save when the label is missing', () => {
-    render(
-      <ConfigModal
-        isCreate
-        isShow
-        payload={createPayload({ label: '' })}
-        onClose={vi.fn()}
-        onConfirm={vi.fn()}
-      />,
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'common.operation.save' }))
-
-    expect(toastErrorSpy).toHaveBeenCalledWith('appDebug.variableConfig.errorMsg.labelNameRequired')
   })
 })

@@ -47,6 +47,9 @@ class TestAgentChatAppGenerateResponseConverterBlocking:
                             "dataset_id": "dataset-1",
                             "dataset_name": "Dataset 1",
                             "document_id": "document-1",
+                            "document_asset_id": None,
+                            "document_revision": None,
+                            "document_version": None,
                             "segment_id": "s1",
                             "position": 1,
                             "data_source_type": "file",
@@ -94,7 +97,7 @@ class TestAgentChatAppGenerateResponseConverterBlocking:
 
 
 class TestAgentChatAppGenerateResponseConverterStream:
-    def build_stream(self) -> Generator[ChatbotAppStreamResponse, None, None]:
+    def build_stream(self) -> Generator[ChatbotAppStreamResponse]:
         def _gen():
             yield ChatbotAppStreamResponse(
                 conversation_id="conv",
@@ -121,6 +124,9 @@ class TestAgentChatAppGenerateResponseConverterStream:
                                 "dataset_id": "dataset-1",
                                 "dataset_name": "Dataset 1",
                                 "document_id": "document-1",
+                                "document_asset_id": None,
+                                "document_revision": None,
+                                "document_version": None,
                                 "segment_id": "s1",
                                 "position": 1,
                                 "data_source_type": "file",
@@ -174,8 +180,12 @@ class TestAgentChatAppGenerateResponseConverterStream:
         assert metadata["retriever_resources"] == [
             {
                 "dataset_id": "dataset-1",
+                "knowledge_fs_citation": None,
                 "dataset_name": "Dataset 1",
                 "document_id": "document-1",
+                "document_asset_id": None,
+                "document_revision": None,
+                "document_version": None,
                 "segment_id": "s1",
                 "position": 1,
                 "data_source_type": "file",

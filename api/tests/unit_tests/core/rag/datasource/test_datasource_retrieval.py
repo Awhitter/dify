@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, Mock, PropertyMock, call, patch
@@ -9,6 +10,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from core.model_context import get_credit_usage_metadata, use_credit_usage_metadata
 from core.rag.datasource import retrieval_service as retrieval_service_module
 from core.rag.datasource.retrieval_service import RetrievalService
 from core.rag.index_processor.constant.doc_type import DocType
@@ -171,12 +173,12 @@ def _upload_file(
     return upload
 
 
+@dataclass(eq=False, repr=False)
 class _SimpleRetrievalChildChunk:
-    def __init__(self, id: str, content: str, score: float, position: int) -> None:
-        self.id = id
-        self.content = content
-        self.score = score
-        self.position = position
+    id: str
+    content: str
+    score: float
+    position: int
 
 
 class _SimpleRetrievalSegment:
@@ -256,6 +258,23 @@ class TestRetrievalServiceInternals:
         assert len(results) == 2
         assert {doc.metadata["doc_id"] for doc in results} == {"att-1", "att-2"}
         assert mock_retrieve.call_count == 2
+
+    def test_retrieve_preserves_credit_metadata_in_embedding_thread(self, app, internal_dataset):
+        observed_metadata: list[dict[str, object] | None] = []
+
+        def record_credit_metadata(**_kwargs: object) -> None:
+            metadata = get_credit_usage_metadata()
+            observed_metadata.append(dict(metadata) if metadata is not None else None)
+
+        with (
+            app.app_context(),
+            use_credit_usage_metadata({"app_id": "classic-app", "created_by": "knowledge_retrieval"}),
+            patch.object(RetrievalService, "_get_dataset", return_value=internal_dataset),
+            patch.object(RetrievalService, "embedding_search", side_effect=record_credit_metadata),
+        ):
+            assert RetrievalService.retrieve(RetrievalMethod.SEMANTIC_SEARCH, internal_dataset.id, "query") == []
+
+        assert observed_metadata == [{"app_id": "classic-app", "created_by": "knowledge_retrieval"}]
 
     @patch("core.rag.datasource.retrieval_service.ExternalDatasetService.fetch_external_knowledge_retrieval")
     @patch("core.rag.datasource.retrieval_service.MetadataFilteringCondition.model_validate")
@@ -899,7 +918,7 @@ class TestRetrievalServiceInternals:
         monkeypatch.setattr(
             RetrievalService,
             "get_segment_attachment_infos",
-            lambda attachment_ids, session: [
+            lambda attachment_ids, *, dataset_refs, session: [
                 {
                     "attachment_id": "attach-node-1",
                     "attachment_info": {
@@ -1172,7 +1191,9 @@ class TestRetrievalServiceInternals:
         assert result is None
 
     def test_get_segment_attachment_infos_returns_empty_when_upload_files_missing(self, sqlite_session: Session):
-        result = RetrievalService.get_segment_attachment_infos(["upload-1"], sqlite_session)
+        result = RetrievalService.get_segment_attachment_infos(
+            ["upload-1"], dataset_refs=(("tenant-id", "dataset-id"),), session=sqlite_session
+        )
 
         assert result == []
 
@@ -1180,7 +1201,9 @@ class TestRetrievalServiceInternals:
         sqlite_session.add(_upload_file(file_id="upload-1", name="file-name"))
         sqlite_session.commit()
 
-        result = RetrievalService.get_segment_attachment_infos(["upload-1"], sqlite_session)
+        result = RetrievalService.get_segment_attachment_infos(
+            ["upload-1"], dataset_refs=(("tenant-id", "dataset-id"),), session=sqlite_session
+        )
 
         assert result == []
 
@@ -1200,7 +1223,9 @@ class TestRetrievalServiceInternals:
         sqlite_session.add_all([upload_file_1, upload_file_2, binding])
         sqlite_session.commit()
 
-        result = RetrievalService.get_segment_attachment_infos(["upload-1", "upload-2"], sqlite_session)
+        result = RetrievalService.get_segment_attachment_infos(
+            ["upload-1", "upload-2"], dataset_refs=(("tenant-id", "dataset-id"),), session=sqlite_session
+        )
 
         assert result == [
             {

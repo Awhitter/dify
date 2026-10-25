@@ -21,15 +21,12 @@ export type AppSelectorValue = {
 
 type AppSelectorProps = {
   value?: AppSelectorValue
-  scope?: string
   disabled?: boolean
-  offset?: number
   onSelect: (app: AppSelectorValue) => void
 }
 
-export function AppSelector({ value, disabled, offset = 4, onSelect }: AppSelectorProps) {
-  const { t } = useTranslation()
-  const [isShow, setIsShow] = useState(false)
+export function AppSelector({ value, disabled, onSelect }: AppSelectorProps) {
+  const { t } = useTranslation(['app'])
   const [isShowChooseApp, setIsShowChooseApp] = useState(false)
   const [searchText, setSearchText] = useState('')
 
@@ -114,7 +111,7 @@ export function AppSelector({ value, disabled, offset = 4, onSelect }: AppSelect
   )
 
   return (
-    <Popover open={isShow} onOpenChange={setIsShow}>
+    <Popover>
       <PopoverTrigger
         aria-label={t(($) => $['appSelector.label'], { ns: 'app' })}
         disabled={disabled}
@@ -123,7 +120,7 @@ export function AppSelector({ value, disabled, offset = 4, onSelect }: AppSelect
             {...props}
             type="button"
             className={cn(
-              'block w-full rounded-lg border-0 bg-transparent p-0 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-state-accent-solid',
+              'block w-full rounded-lg border-0 bg-transparent p-0 text-left',
               props.className,
             )}
           >
@@ -132,7 +129,7 @@ export function AppSelector({ value, disabled, offset = 4, onSelect }: AppSelect
         )}
       />
       <PopoverContent
-        sideOffset={offset}
+        sideOffset={4}
         className="border-0 bg-transparent p-0 shadow-none backdrop-blur-none"
       >
         <div className="relative min-h-20 w-97.25 rounded-xl border-[0.5px] border-components-panel-border bg-components-panel-bg-blur shadow-lg backdrop-blur-xs">
@@ -141,8 +138,6 @@ export function AppSelector({ value, disabled, offset = 4, onSelect }: AppSelect
               {t(($) => $['appSelector.label'], { ns: 'app' })}
             </div>
             <AppPicker
-              placement="bottom"
-              offset={offset}
               trigger={<AppTrigger open={isShowChooseApp} appDetail={currentAppInfo} />}
               isShow={isShowChooseApp}
               onShowChange={setIsShowChooseApp}

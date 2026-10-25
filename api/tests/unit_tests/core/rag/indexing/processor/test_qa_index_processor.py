@@ -1,10 +1,12 @@
 import logging
+from contextlib import closing
+from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, patch
 
-import pandas as pd
 import pytest
+from flask import Flask
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 from werkzeug.datastructures import FileStorage
@@ -15,6 +17,7 @@ from core.rag.index_processor.processor.qa_index_processor import QAIndexProcess
 from core.rag.models.document import AttachmentDocument, Document
 from models.dataset import Dataset, DocumentSegment
 from models.dataset import Document as DatasetDocument
+from models.enums import DataSourceType, DocumentCreatedFrom
 
 
 class _ImmediateThread:
@@ -48,7 +51,17 @@ class TestQAIndexProcessor:
 
     @pytest.fixture
     def dataset_document(self) -> DatasetDocument:
-        return DatasetDocument(id="doc-1", created_by="user-1")
+        return DatasetDocument(
+            id="doc-1",
+            tenant_id="tenant-1",
+            dataset_id="dataset-1",
+            position=1,
+            data_source_type=DataSourceType.UPLOAD_FILE,
+            batch="batch-1",
+            name="qa.txt",
+            created_from=DocumentCreatedFrom.WEB,
+            created_by="user-1",
+        )
 
     @pytest.fixture
     def process_rule(self) -> dict:
@@ -95,7 +108,9 @@ class TestQAIndexProcessor:
         splitter = Mock()
         splitter.split_documents.return_value = [split_node]
 
-        def _append_document(flask_app, tenant_id, document_node, all_qa_documents, document_language):
+        def _append_document(
+            flask_app: Flask, tenant_id, document_node, all_qa_documents: list[Document], document_language
+        ):
             all_qa_documents.append(Document(page_content="Q1", metadata={"answer": "A1"}))
 
         with (
@@ -142,7 +157,7 @@ class TestQAIndexProcessor:
         splitter = Mock()
         splitter.split_documents.return_value = [split_node]
 
-        def _append_document(flask_app, tenant_id, document_node, all_qa_documents, document_language):
+        def _append_document(flask_app: Flask, tenant_id, document_node, all_qa_documents, document_language):
             all_qa_documents.append(Document(page_content=f"Q-{document_node.page_content}", metadata={"answer": "A"}))
 
         with (
@@ -180,40 +195,26 @@ class TestQAIndexProcessor:
         assert mock_format.call_count == 2
 
     def test_format_by_template_validates_file_type(self, processor: QAIndexProcessor) -> None:
-        not_csv_file = Mock(spec=FileStorage)
-        not_csv_file.filename = "qa.txt"
-
-        with pytest.raises(ValueError, match="Only CSV files"):
-            processor.format_by_template(not_csv_file)
+        with closing(FileStorage(stream=BytesIO(b"not csv"), filename="qa.txt")) as file:
+            with pytest.raises(ValueError, match="Only CSV files"):
+                processor.format_by_template(file)
 
     def test_format_by_template_parses_csv_rows(self, processor: QAIndexProcessor) -> None:
-        csv_file = Mock(spec=FileStorage)
-        csv_file.filename = "qa.csv"
-        dataframe = pd.DataFrame([["Q1", "A1"], ["Q2", "A2"]])
-
-        with patch("core.rag.index_processor.processor.qa_index_processor.pd.read_csv", return_value=dataframe):
-            docs = processor.format_by_template(csv_file)
+        with closing(FileStorage(stream=BytesIO(b"question,answer\nQ1,A1\nQ2,A2\n"), filename="qa.csv")) as file:
+            docs = processor.format_by_template(file)
 
         assert [doc.page_content for doc in docs] == ["Q1", "Q2"]
         assert [doc.metadata["answer"] for doc in docs] == ["A1", "A2"]
 
     def test_format_by_template_raises_on_empty_csv(self, processor: QAIndexProcessor) -> None:
-        csv_file = Mock(spec=FileStorage)
-        csv_file.filename = "qa.csv"
-
-        with patch("core.rag.index_processor.processor.qa_index_processor.pd.read_csv", return_value=pd.DataFrame()):
+        with closing(FileStorage(stream=BytesIO(b"question,answer\n"), filename="qa.csv")) as file:
             with pytest.raises(ValueError, match="empty"):
-                processor.format_by_template(csv_file)
+                processor.format_by_template(file)
 
     def test_format_by_template_raises_on_invalid_csv(self, processor: QAIndexProcessor) -> None:
-        csv_file = Mock(spec=FileStorage)
-        csv_file.filename = "qa.csv"
-
-        with patch(
-            "core.rag.index_processor.processor.qa_index_processor.pd.read_csv", side_effect=Exception("bad csv")
-        ):
-            with pytest.raises(ValueError, match="bad csv"):
-                processor.format_by_template(csv_file)
+        with closing(FileStorage(stream=BytesIO(b'question,answer\n"unterminated'), filename="qa.csv")) as file:
+            with pytest.raises(ValueError, match="Error tokenizing data"):
+                processor.format_by_template(file)
 
     def test_load_creates_vectors_for_high_quality_dataset(
         self, processor: QAIndexProcessor, dataset: Dataset, sqlite_session: Session
@@ -286,7 +287,7 @@ class TestQAIndexProcessor:
 
         with (
             patch(
-                "core.rag.index_processor.processor.qa_index_processor.SummaryIndexService.delete_summaries_for_segments"
+                "core.rag.index_processor.processor.qa_index_processor.SummaryIndexAdapter.delete_summaries_for_segments"
             ) as mock_summary,
             patch("core.rag.index_processor.processor.qa_index_processor.Vector") as mock_vector_cls,
         ):
@@ -302,7 +303,7 @@ class TestQAIndexProcessor:
         session = sqlite_session
         with (
             patch(
-                "core.rag.index_processor.processor.qa_index_processor.SummaryIndexService.delete_summaries_for_segments"
+                "core.rag.index_processor.processor.qa_index_processor.SummaryIndexAdapter.delete_summaries_for_segments"
             ) as mock_summary,
             patch("core.rag.index_processor.processor.qa_index_processor.Vector") as mock_vector_cls,
         ):

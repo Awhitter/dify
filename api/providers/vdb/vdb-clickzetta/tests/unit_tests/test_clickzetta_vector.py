@@ -1,19 +1,19 @@
 import importlib
 import queue
 import sys
-import types
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.rag.datasource.vdb.vector_integration_test_support import FakeModule
 from core.rag.models.document import Document
 from models.dataset import Dataset
 
 
 def _build_fake_clickzetta_module():
-    clickzetta = types.ModuleType("clickzetta")
+    clickzetta = FakeModule("clickzetta")
 
     class _FakeCursor:
         def __init__(self):
@@ -238,7 +238,7 @@ def test_factory_initializes_clickzetta_vector(clickzetta_module, monkeypatch: p
     monkeypatch.setattr(clickzetta_module.dify_config, "CLICKZETTA_VECTOR_DISTANCE_FUNCTION", "cosine_distance")
 
     with patch.object(clickzetta_module, "ClickzettaVector", return_value="vector") as vector_cls:
-        result = factory.init_vector(dataset, attributes=[], embeddings=MagicMock())
+        result = factory.init_vector(dataset, attributes=[], embeddings=MagicMock(), session=None)
 
     assert result == "vector"
     assert vector_cls.call_args.kwargs["collection_name"] == "collection"
@@ -422,7 +422,9 @@ def test_write_queue_initialization_worker_and_execute_write(clickzetta_module, 
     clickzetta_module.ClickzettaVector._shutdown = False
     clickzetta_module.ClickzettaVector._init_write_queue()
     clickzetta_module.ClickzettaVector._init_write_queue()
-    assert clickzetta_module.ClickzettaVector._write_thread.started == 1
+    write_thread = clickzetta_module.ClickzettaVector._write_thread
+    assert isinstance(write_thread, _Thread)
+    assert write_thread.started == 1
 
     result_queue_ok = queue.Queue()
     result_queue_fail = queue.Queue()
@@ -809,7 +811,7 @@ def test_clickzetta_pool_cleanup_and_shutdown_edge_paths(clickzetta_module):
     pool._pools["missing-lock-key"] = [(MagicMock(), 0.0)]
     pool._cleanup_expired_connections()
     pool.shutdown()
-    assert pool._shutdown is True
+    assert pool._shutdown is True  # pyrefly: ignore[unnecessary-comparison]
 
 
 def test_clickzetta_pool_cleanup_thread_and_worker_exception_paths(clickzetta_module, monkeypatch: pytest.MonkeyPatch):

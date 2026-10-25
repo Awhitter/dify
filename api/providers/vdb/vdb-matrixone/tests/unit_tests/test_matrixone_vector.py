@@ -1,21 +1,21 @@
 import importlib
 import json
 import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
+from core.rag.datasource.vdb.vector_integration_test_support import FakeModule
 from core.rag.models.document import Document
 from models.dataset import Dataset
 
 
 def _build_fake_mo_vector_modules():
-    mo_vector = types.ModuleType("mo_vector")
+    mo_vector = FakeModule("mo_vector")
     mo_vector.__path__ = []
-    mo_vector_client = types.ModuleType("mo_vector.client")
+    mo_vector_client = FakeModule("mo_vector.client")
 
     class MoVectorClient:
         def __init__(self, **kwargs):
@@ -246,8 +246,8 @@ def test_matrixone_factory_uses_existing_or_generated_collection(matrixone_modul
     monkeypatch.setattr(matrixone_module.dify_config, "MATRIXONE_METRIC", "l2")
 
     with patch.object(matrixone_module, "MatrixoneVector", return_value="vector") as vector_cls:
-        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock())
-        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock())
+        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock(), session=None)
+        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock(), session=None)
 
     assert result_1 == "vector"
     assert result_2 == "vector"

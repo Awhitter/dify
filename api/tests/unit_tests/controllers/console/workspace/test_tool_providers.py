@@ -7,7 +7,7 @@ import importlib
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from inspect import unwrap
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import NAMESPACE_URL, uuid5
 
@@ -15,6 +15,7 @@ import pytest
 from flask import Flask
 from flask.views import MethodView
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
+from werkzeug.exceptions import Forbidden
 
 from core.tools.entities.api_entities import ToolProviderApiEntity as CoreToolProviderApiEntity
 from core.tools.entities.common_entities import I18nObject
@@ -24,6 +25,8 @@ from models import Account, BuiltinToolProvider, Tenant, TenantAccountJoin
 from models.account import TenantAccountRole
 from models.credential_permission import CredentialPermission
 from models.enums import PermissionEnum
+from repositories.credentials.query_repository import CredentialQueryRepository
+from services.plugin.dispatch_identity import PluginOAuthClientConfig
 
 if not hasattr(builtins, "MethodView"):
     builtins.MethodView = MethodView  # type: ignore[attr-defined]
@@ -41,7 +44,7 @@ def app() -> Flask:
 
 
 @pytest.fixture
-def controller_module(monkeypatch: pytest.MonkeyPatch, config_overrides: Callable[..., None]):
+def controller_module(monkeypatch: pytest.MonkeyPatch, config_overrides: Callable[..., None], sqlite_session_factory):
     """
     Import the controller with auth decorators neutralized only during import.
 
@@ -79,6 +82,11 @@ def controller_module(monkeypatch: pytest.MonkeyPatch, config_overrides: Callabl
 
     login_module = importlib.import_module("libs.login")
     monkeypatch.setattr(login_module, "check_csrf_token", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "application_services",
+        lambda: SimpleNamespace(credential_queries=CredentialQueryRepository(session_factory=sqlite_session_factory)),
+    )
     return module
 
 
@@ -128,11 +136,18 @@ def _provider_credential(
 
 @contextmanager
 def _bind_database_session(session: Session):
-    database_session = scoped_session(
-        sessionmaker(bind=session.get_bind(), expire_on_commit=False),
-    )
+    session_factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False)
+    database_session = scoped_session(session_factory)
     try:
-        with patch("extensions.ext_database.db.session", database_session):
+        with (
+            patch("extensions.ext_database.db.session", database_session),
+            patch(
+                "controllers.console.workspace.tool_providers.application_services",
+                return_value=SimpleNamespace(
+                    credential_queries=CredentialQueryRepository(session_factory=session_factory)
+                ),
+            ),
+        ):
             yield
     finally:
         database_session.remove()
@@ -806,7 +821,9 @@ def _mock_oauth_start_deps(controller_module: ModuleType, monkeypatch: pytest.Mo
     monkeypatch.setattr(
         controller_module.BuiltinToolManageService,
         "get_oauth_client",
-        MagicMock(return_value={"client_id": "abc"}),
+        lambda *_args, **_kwargs: PluginOAuthClientConfig(
+            "langgenius/github:1.0.0@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", {"client_id": "abc"}
+        ),
     )
     create_proxy_context = MagicMock(return_value="ctx-id")
     monkeypatch.setattr(controller_module.OAuthProxyService, "create_proxy_context", create_proxy_context)
@@ -848,7 +865,10 @@ def test_tool_plugin_oauth_url_stashes_valid_visibility(
         )
 
     _, kwargs = create_proxy_context.call_args
-    assert kwargs["extra_data"] == {"visibility": expected_stored}
+    assert kwargs["extra_data"] == {
+        "visibility": expected_stored,
+        "plugin_unique_identifier": "langgenius/github:1.0.0@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }
 
 
 @pytest.mark.parametrize("query_string", ["", "visibility=partial_members", "visibility=nonsense"])
@@ -873,7 +893,10 @@ def test_tool_plugin_oauth_url_unknown_visibility_falls_back_to_only_me(
         )
 
     _, kwargs = create_proxy_context.call_args
-    assert kwargs["extra_data"] == {"visibility": "only_me"}
+    assert kwargs["extra_data"] == {
+        "visibility": "only_me",
+        "plugin_unique_identifier": "langgenius/github:1.0.0@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }
 
 
 def _invoke_oauth_callback(
@@ -884,7 +907,7 @@ def _invoke_oauth_callback(
     provider: str = _OAUTH_PROVIDER_PATH,
 ):
     api = controller_module.ToolOAuthCallback()
-    ctx = {"user_id": "user-oauth", "tenant_id": "tenant-oauth"}
+    ctx = {"user_id": "user-oauth", "tenant_id": "tenant-oauth", "plugin_id": "langgenius/github", "provider": "github"}
     if stored_visibility is not None:
         ctx["visibility"] = stored_visibility
     with app.test_request_context(
@@ -896,6 +919,32 @@ def _invoke_oauth_callback(
             return unwrap(api.get)(api, provider=provider)
 
 
+def test_tool_oauth_callback_rejects_replaced_package_before_dispatch(
+    app: Flask, controller_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = {
+        "user_id": "user-oauth",
+        "tenant_id": "tenant-oauth",
+        "plugin_id": "langgenius/github",
+        "provider": "github",
+        "plugin_unique_identifier": f"langgenius/github:1.0.0@{'a' * 64}",
+    }
+    config = PluginOAuthClientConfig(f"langgenius/github:2.0.0@{'b' * 64}", {"client_secret": "test-secret"})
+    monkeypatch.setattr(controller_module.OAuthProxyService, "use_proxy_context", lambda _context_id: context)
+    monkeypatch.setattr(
+        controller_module.BuiltinToolManageService, "get_oauth_client", lambda *_args, **_kwargs: config
+    )
+
+    def unexpected_dispatch(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Changed packages must not receive OAuth credentials")
+
+    monkeypatch.setattr(controller_module.OAuthHandler, "get_credentials", unexpected_dispatch)
+    api = controller_module.ToolOAuthCallback()
+    with app.test_request_context("/", headers={"Cookie": "context_id=ctx-id"}):
+        with pytest.raises(Forbidden, match="Plugin changed"):
+            unwrap(api.get)(api, provider=_OAUTH_PROVIDER_PATH)
+
+
 @contextmanager
 def _mock_oauth_callback_deps(controller_module: ModuleType, monkeypatch: pytest.MonkeyPatch):
     """Mock everything ToolOAuthCallback.get calls out to and capture the
@@ -903,7 +952,9 @@ def _mock_oauth_callback_deps(controller_module: ModuleType, monkeypatch: pytest
     monkeypatch.setattr(
         controller_module.BuiltinToolManageService,
         "get_oauth_client",
-        MagicMock(return_value={"client_id": "abc"}),
+        lambda *_args, **_kwargs: PluginOAuthClientConfig(
+            "langgenius/github:1.0.0@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", {"client_id": "abc"}
+        ),
     )
     add_provider = MagicMock()
     monkeypatch.setattr(controller_module.BuiltinToolManageService, "add_builtin_tool_provider", add_provider)

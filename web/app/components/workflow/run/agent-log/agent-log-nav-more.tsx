@@ -6,7 +6,6 @@ import {
   DropdownMenuTrigger,
 } from '@langgenius/dify-ui/dropdown-menu'
 import { IconButton } from '@langgenius/dify-ui/icon-button'
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 type AgentLogNavMoreProps = {
@@ -14,11 +13,10 @@ type AgentLogNavMoreProps = {
   onShowAgentOrToolLog: (detail?: AgentLogItemWithChildren) => void
 }
 const AgentLogNavMore = ({ options, onShowAgentOrToolLog }: AgentLogNavMoreProps) => {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  const { t } = useTranslation(['common'])
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <IconButton
@@ -31,12 +29,7 @@ const AgentLogNavMore = ({ options, onShowAgentOrToolLog }: AgentLogNavMoreProps
           </IconButton>
         }
       />
-      <DropdownMenuContent
-        placement="bottom-start"
-        sideOffset={2}
-        alignOffset={-54}
-        className="w-34 p-1"
-      >
+      <DropdownMenuContent align="start" sideOffset={2} alignOffset={-54} className="w-34 p-1">
         {options.map((option) => (
           <DropdownMenuItem
             key={option.message_id}

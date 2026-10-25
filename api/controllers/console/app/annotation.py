@@ -6,7 +6,7 @@ from flask_restx import Resource
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from werkzeug.exceptions import NotFound
+from werkzeug.exceptions import BadRequest, NotFound
 
 from controllers.common.errors import NoFileUploadedError, TooManyFilesError
 from controllers.common.rbac import PlainApp, RBACCheck
@@ -35,8 +35,10 @@ from fields.annotation_fields import (
     AnnotationList,
 )
 from fields.base import ResponseModel
+from libs.external_api import error_responses
 from libs.helper import dump_response, uuid_value
 from libs.login import current_account_with_tenant, login_required
+from libs.pagination import clamp_pagination
 from models.model import App
 from services.annotation_service import (
     AppAnnotationService,
@@ -72,6 +74,13 @@ class AnnotationListQuery(BaseModel):
     page: int = Field(default=1, ge=1, description="Page number")
     limit: int = Field(default=20, ge=1, description="Page size")
     keyword: str = Field(default="", description="Search keyword")
+
+
+class AnnotationBatchDeleteQuery(BaseModel):
+    annotation_id: list[str] = Field(
+        default_factory=list,
+        description="Annotation IDs to delete; omitting it clears all annotations of the app",
+    )
 
 
 class CreateAnnotationPayload(BaseModel):
@@ -138,11 +147,6 @@ class AnnotationBatchImportResponse(ResponseModel):
 
 register_schema_models(
     console_ns,
-    Annotation,
-    AnnotationList,
-    AnnotationExportList,
-    AnnotationHitHistory,
-    AnnotationHitHistoryList,
     AnnotationReplyPayload,
     AnnotationSettingUpdatePayload,
     AnnotationListQuery,
@@ -301,13 +305,18 @@ class AnnotationApi(Resource):
         page = req_data.page
         limit = req_data.limit
         keyword = req_data.keyword
+        effective_page, effective_limit = clamp_pagination(page, limit, 100)
 
         annotation_list, total = AppAnnotationService.get_annotation_list_by_app_id(
-            str(app_id), page, limit, keyword, session
+            str(app_id), effective_page, effective_limit, keyword, session
         )
         annotation_models = TypeAdapter(list[Annotation]).validate_python(annotation_list, from_attributes=True)
         return AnnotationList(
-            data=annotation_models, has_more=len(annotation_list) == limit, limit=limit, total=total, page=page
+            data=annotation_models,
+            has_more=effective_page * effective_limit < total,
+            limit=effective_limit,
+            total=total,
+            page=effective_page,
         ).model_dump(mode="json"), 200
 
     @console_ns.doc("create_annotation")
@@ -342,10 +351,10 @@ class AnnotationApi(Resource):
     @account_initialization_required
     @edit_permission_required
     @rbac_permission_required(RBACCheck(RBACPermission.APP_CREATE_AND_MANAGEMENT, PlainApp()))
+    @console_ns.doc(params=query_params_from_model(AnnotationBatchDeleteQuery))
     @console_ns.response(204, "Annotations deleted successfully")
     @with_session
     def delete(self, session: Session, app_id: UUID):
-
         # Use request.args.getlist to get annotation_ids array directly
         annotation_ids = request.args.getlist("annotation_id")
 
@@ -353,10 +362,7 @@ class AnnotationApi(Resource):
         if annotation_ids:
             # Check if any annotation_ids contain empty strings or invalid values
             if not all(annotation_id.strip() for annotation_id in annotation_ids if annotation_id):
-                return {
-                    "code": "bad_request",
-                    "message": "annotation_ids are required if the parameter is provided.",
-                }, 400
+                raise BadRequest("annotation_ids are required if the parameter is provided.")
 
             app_ref = _get_app_ref(session, str(app_id))
             AppAnnotationService.delete_app_annotations_in_batch(app_ref, annotation_ids, session)
@@ -441,6 +447,7 @@ class AnnotationUpdateDeleteApi(Resource):
 
 @console_ns.route("/apps/<uuid:app_id>/annotations/batch-import")
 class AnnotationBatchImportApi(Resource):
+    @error_responses(NoFileUploadedError, TooManyFilesError)
     @console_ns.doc("batch_import_annotations")
     @console_ns.doc(description="Batch import annotations from CSV file with rate limiting and security checks")
     @console_ns.doc(params={"app_id": "Application ID"})
@@ -551,17 +558,24 @@ class AnnotationHitHistoryListApi(Resource):
     def get(self, session: Session, app_id: UUID, annotation_id: UUID):
         page = request.args.get("page", default=1, type=int)
         limit = request.args.get("limit", default=20, type=int)
+        # This route takes both straight off the query string with no bounds, so
+        # clamp them the way the query itself will.
+        effective_page, effective_limit = clamp_pagination(page, limit, 100)
         app_ref = _get_app_ref(session, str(app_id))
         annotation_ref = AppRefService.create_annotation_ref(app_ref, str(annotation_id))
         annotation_hit_history_list, total = AppAnnotationService.get_annotation_hit_histories(
             annotation_ref,
-            page,
-            limit,
+            effective_page,
+            effective_limit,
             session,
         )
         history_models = TypeAdapter(list[AnnotationHitHistory]).validate_python(
             annotation_hit_history_list, from_attributes=True
         )
         return AnnotationHitHistoryList(
-            data=history_models, has_more=len(annotation_hit_history_list) == limit, limit=limit, total=total, page=page
+            data=history_models,
+            has_more=effective_page * effective_limit < total,
+            limit=effective_limit,
+            total=total,
+            page=effective_page,
         ).model_dump(mode="json")

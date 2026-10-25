@@ -86,7 +86,7 @@ export function SubmitRequestDropdownMenu({
   dividerAfterFirst,
   docLink,
 }: SubmitRequestDropdownMenuProps) {
-  const { t } = useTranslation()
+  const { t } = useTranslation(['plugin'])
   const [open, setOpen] = useState(false)
   const options = getOptions(docLink)
   const guideLabel = t(($) => $['marketplace.home.guide'], { ns: 'plugin' })
@@ -109,11 +109,11 @@ export function SubmitRequestDropdownMenu({
             />
           }
         />
-        <TooltipContent placement="bottom" role="tooltip">
+        <TooltipContent side="bottom" role="tooltip">
           {guideLabel}
         </TooltipContent>
       </Tooltip>
-      <DropdownMenuContent placement="bottom-end" sideOffset={4} className="min-w-50 p-1">
+      <DropdownMenuContent className="min-w-50 p-1">
         {options.map((option, index) => (
           <Fragment key={option.href}>
             {dividerAfterFirst && index === 1 && <DropdownMenuSeparator className="my-1" />}

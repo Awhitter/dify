@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from core.workflow.file_reference import build_file_reference
 from models.agent_config_entities import (
@@ -26,6 +27,30 @@ def test_agent_soul_model_settings_preserves_plugin_declared_parameters() -> Non
     assert dumped["temperature"] == 0.7
     assert dumped["enable_thinking"] is True
     assert dumped["thinking_budget"] == 4096
+
+
+@pytest.mark.parametrize(
+    "response_format",
+    [
+        "text",
+        "json_schema",
+        {"type": "text"},
+        {"type": "json_schema", "json_schema": {"name": "response", "schema": {"type": "object"}}},
+        None,
+    ],
+)
+def test_agent_model_response_format_preserves_plugin_and_legacy_shapes(response_format: object) -> None:
+    settings = AgentSoulModelSettings.model_validate({"response_format": response_format})
+
+    assert settings.model_dump(mode="json", exclude_none=True) == (
+        {"response_format": response_format} if response_format is not None else {}
+    )
+
+
+@pytest.mark.parametrize("response_format", [[], ["text"], 1, True])
+def test_agent_model_response_format_rejects_non_string_or_object_values(response_format: object) -> None:
+    with pytest.raises(ValidationError, match="response_format"):
+        AgentSoulModelSettings.model_validate({"response_format": response_format})
 
 
 def test_file_default_value_accepts_canonical_reference_mapping() -> None:
@@ -246,3 +271,40 @@ def test_effective_declared_outputs_prepends_optional_system_text() -> None:
     assert [output.name for output in effective] == ["text", "summary"]
     assert effective[0].type == DeclaredOutputType.STRING
     assert effective[0].required is False
+
+
+@pytest.mark.parametrize(
+    ("enabled", "count", "expected"),
+    [(False, 0, ["text"]), (False, 1, ["text"]), (False, 2, ["text"]), (True, 2, ["text", "switch"])],
+)
+def test_effective_outputs_follow_route_selection_contract(enabled: bool, count: int, expected: list[str]) -> None:
+    job = WorkflowNodeJobConfig.model_validate(
+        {
+            "output_routes": {
+                "enabled": enabled,
+                "routes": [{"id": str(index), "name": "condition"} for index in range(count)],
+            }
+        }
+    )
+    assert [output.name for output in effective_declared_outputs([], job.output_routes)] == expected
+
+
+@pytest.mark.parametrize("count", [0, 1])
+def test_enabled_output_routes_require_at_least_two_routes(count: int) -> None:
+    with pytest.raises(ValueError, match="at least two routes"):
+        WorkflowNodeJobConfig.model_validate(
+            {"output_routes": {"enabled": True, "routes": [{"id": str(index)} for index in range(count)]}}
+        )
+
+
+@pytest.mark.parametrize("ids", [[""], ["source"], ["fail-branch"], ["target"], ["same", "same"]])
+def test_output_routes_reject_invalid_handle_identities(ids: list[str]) -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            "(?:1 validation error for WorkflowNodeJobConfig\\\noutput_routes|1 "
+            "validation error for WorkflowNodeJobConfig\\\noutput_routes\\.routes\\"
+            ".0\\.id)"
+        ),
+    ):
+        WorkflowNodeJobConfig.model_validate({"output_routes": {"routes": [{"id": id, "name": ""} for id in ids]}})

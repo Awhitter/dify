@@ -1,18 +1,18 @@
 import importlib
 import json
 import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.rag.datasource.vdb.vector_integration_test_support import FakeModule
 from core.rag.models.document import Document
 from models.dataset import Dataset
 
 
 def _build_fake_clickhouse_connect_module():
-    clickhouse_connect = types.ModuleType("clickhouse_connect")
+    clickhouse_connect = FakeModule("clickhouse_connect")
 
     class QueryResult:
         def __init__(self, rows=None, named_rows=None):
@@ -108,8 +108,8 @@ def test_factory_initializes_lower_case_collection_name(myscale_module, monkeypa
     monkeypatch.setattr(myscale_module.dify_config, "MYSCALE_FTS_PARAMS", "")
 
     with patch.object(myscale_module, "MyScaleVector", return_value="vector") as vector_cls:
-        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock())
-        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock())
+        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock(), session=None)
+        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock(), session=None)
 
     assert result_1 == "vector"
     assert result_2 == "vector"

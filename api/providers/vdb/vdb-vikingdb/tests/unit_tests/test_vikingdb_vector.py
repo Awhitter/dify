@@ -1,21 +1,21 @@
 import importlib
 import json
 import sys
-import types
 from collections import UserDict
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.rag.datasource.vdb.vector_integration_test_support import FakeModule
 from core.rag.models.document import Document
 from models.dataset import Dataset
 
 
 def _build_fake_vikingdb_modules():
-    volcengine = types.ModuleType("volcengine")
+    volcengine = FakeModule("volcengine")
     volcengine.__path__ = []
-    viking_db = types.ModuleType("volcengine.viking_db")
+    viking_db = FakeModule("volcengine.viking_db")
 
     class Data(UserDict):
         def __init__(self, payload):
@@ -272,8 +272,8 @@ def test_vikingdb_factory_validates_config_and_builds_vector(vikingdb_module, mo
         monkeypatch.setattr(vikingdb_module.dify_config, "VIKINGDB_CONNECTION_TIMEOUT", 10)
         monkeypatch.setattr(vikingdb_module.dify_config, "VIKINGDB_SOCKET_TIMEOUT", 20)
 
-        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock())
-        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock())
+        result_1 = factory.init_vector(dataset_with_index, attributes=[], embeddings=MagicMock(), session=None)
+        result_2 = factory.init_vector(dataset_without_index, attributes=[], embeddings=MagicMock(), session=None)
 
     assert result_1 == "vector"
     assert result_2 == "vector"
@@ -306,4 +306,4 @@ def test_vikingdb_factory_raises_when_required_config_missing(
     monkeypatch.setattr(vikingdb_module.dify_config, field, None)
 
     with pytest.raises(ValueError, match=message):
-        factory.init_vector(dataset, attributes=[], embeddings=MagicMock())
+        factory.init_vector(dataset, attributes=[], embeddings=MagicMock(), session=None)

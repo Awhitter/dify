@@ -12,32 +12,27 @@ import pytest
 
 from core.repositories.celery_workflow_node_execution_repository import CeleryWorkflowNodeExecutionRepository
 from core.repositories.factory import OrderConfig
+from core.workflow.node_execution_process_data import WORKFLOW_TOOL_ROOT_APP_ID_KEY
 from graphon.entities.workflow_node_execution import (
     WorkflowNodeExecution,
     WorkflowNodeExecutionStatus,
 )
 from graphon.enums import BuiltinNodeTypes
+from graphon.variables.segments import ArrayFileSegment, ArrayObjectSegment, StringSegment
 from libs.datetime_utils import naive_utc_now
-from models import Account, EndUser, Tenant
+from models import Account, EndUser, Tenant, WorkflowNodeExecutionModel
 from models.workflow import WorkflowNodeExecutionTriggeredFrom
+from tasks.workflow_node_execution_tasks import (
+    save_workflow_node_execution_task,
+    save_workflow_node_executions_task,
+)
 
 RESOURCE_TENANT_ID = "resource-tenant-id"
 
 
 @pytest.fixture
-def mock_session_factory():
-    """Mock SQLAlchemy session factory."""
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
-
-    # Create a real sessionmaker with in-memory SQLite for testing
-    engine = create_engine("sqlite:///:memory:")
-    return sessionmaker(bind=engine)
-
-
-@pytest.fixture
-def mock_account():
-    """Mock Account user."""
+def account():
+    """Create an Account user."""
     account = Account(name="Test Account", email="test@example.com")
     account.id = str(uuid4())
     account._current_tenant = Tenant(name="Test Tenant")
@@ -46,8 +41,8 @@ def mock_account():
 
 
 @pytest.fixture
-def mock_end_user():
-    """Mock EndUser."""
+def end_user():
+    """Create an EndUser."""
     user = EndUser(
         id=str(uuid4()),
         tenant_id=str(uuid4()),
@@ -76,15 +71,145 @@ def sample_workflow_node_execution():
 class TestCeleryWorkflowNodeExecutionRepository:
     """Test cases for CeleryWorkflowNodeExecutionRepository."""
 
-    def test_init_with_sessionmaker(self, mock_session_factory, mock_account):
+    @pytest.mark.parametrize("writer", ["save", "save_many"])
+    def test_async_save_preserves_typed_cache_and_plain_history(
+        self, writer, sqlite_session_factory, account, sample_workflow_node_execution
+    ):
+        repo = CeleryWorkflowNodeExecutionRepository(
+            session_factory=sqlite_session_factory,
+            tenant_id=RESOURCE_TENANT_ID,
+            user=account,
+            app_id="test-app",
+            triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
+        )
+        literal_object = {"value_type": "string", "value": "user data"}
+        execution = sample_workflow_node_execution
+        execution.node_type = BuiltinNodeTypes.TOOL
+        execution.status = WorkflowNodeExecutionStatus.SUCCEEDED
+        execution.inputs = {"prompt": StringSegment(value="input")}
+        execution.process_data = {"nested": {"messages": [StringSegment(value="processing")]}}
+        execution.outputs = {
+            "text": StringSegment(value="done"),
+            "files": ArrayFileSegment(value=[]),
+            "json": ArrayObjectSegment(value=[literal_object]),
+            "literal_object": literal_object,
+        }
+        task = save_workflow_node_execution_task if writer == "save" else save_workflow_node_executions_task
+        with patch.object(task, "delay") as delay:
+            if writer == "save":
+                repo.save(execution)
+            else:
+                repo.save_many([execution])
+
+        delay.assert_called_once()
+        assert task.run(**delay.call_args.kwargs) is True
+
+        expected_outputs = {
+            "text": "done",
+            "files": [],
+            "json": [literal_object],
+            "literal_object": literal_object,
+        }
+        with sqlite_session_factory() as observer:
+            stored = observer.get(WorkflowNodeExecutionModel, execution.id)
+            assert stored is not None
+            assert stored.inputs_dict == {"prompt": "input"}
+            assert stored.process_data_dict == {"nested": {"messages": ["processing"]}}
+            assert stored.outputs_dict == expected_outputs
+
+        (cached,) = repo.get_by_workflow_execution(execution.workflow_execution_id)
+        assert cached is execution
+        assert isinstance(cached.inputs["prompt"], StringSegment)
+        assert isinstance(cached.process_data["nested"]["messages"][0], StringSegment)
+        assert isinstance(cached.outputs["text"], StringSegment)
+        assert isinstance(cached.outputs["files"], ArrayFileSegment)
+        assert isinstance(cached.outputs["json"], ArrayObjectSegment)
+        assert cached.outputs["literal_object"] == literal_object
+
+        history_repo = CeleryWorkflowNodeExecutionRepository(
+            session_factory=sqlite_session_factory,
+            tenant_id=RESOURCE_TENANT_ID,
+            user=account,
+            app_id="test-app",
+            triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
+        )
+        (restored,) = history_repo.get_by_workflow_execution(execution.workflow_execution_id)
+        assert restored.inputs == {"prompt": "input"}
+        assert restored.process_data == {"nested": {"messages": ["processing"]}}
+        assert restored.outputs == expected_outputs
+
+    def test_trace_read_keeps_source_nodes_out_of_runtime_cache(
+        self, sqlite_session_factory, end_user, sample_workflow_node_execution
+    ):
+        caller = CeleryWorkflowNodeExecutionRepository(
+            session_factory=sqlite_session_factory,
+            tenant_id=RESOURCE_TENANT_ID,
+            user=end_user,
+            app_id="caller-app",
+            triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
+        )
+        root = sample_workflow_node_execution
+        caller.save_synchronously(root)
+        source = caller.for_workflow_tool("source-app")
+        child = root.model_copy(
+            update={
+                "id": "child",
+                "node_execution_id": "child",
+                "process_data": {WORKFLOW_TOOL_ROOT_APP_ID_KEY: "caller-app"},
+            }
+        )
+        source.save_synchronously(child)
+        assert [node.id for node in caller.get_by_workflow_execution(root.workflow_execution_id)] == [root.id]
+        assert [node.id for node in source.get_by_workflow_execution(root.workflow_execution_id)] == [child.id]
+        assert [node.id for node in caller.get_by_workflow_execution(root.workflow_execution_id)] == [root.id]
+
+    @patch("core.repositories.celery_workflow_node_execution_repository.save_workflow_node_execution_task")
+    def test_workflow_tool_scope_keeps_async_backend_and_isolates_same_app_history(
+        self, mock_task, sqlite_session_factory, end_user, sample_workflow_node_execution
+    ):
+        caller = CeleryWorkflowNodeExecutionRepository(
+            session_factory=sqlite_session_factory,
+            tenant_id=RESOURCE_TENANT_ID,
+            user=end_user,
+            app_id="caller-app",
+            triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
+        )
+        source = caller.for_workflow_tool("caller-app")
+        root_node = sample_workflow_node_execution
+        source_node = root_node.model_copy(update={"id": "source-exec", "node_execution_id": "source-exec"})
+        caller.save_synchronously(root_node)
+        source.save_synchronously(source_node)
+        source_node.status = WorkflowNodeExecutionStatus.SUCCEEDED
+        source_node.outputs = {"answer": "ok"}
+        source.save(source_node)
+        source.save_execution_data(source_node)
+
+        assert [node.id for node in caller.get_by_workflow_execution(root_node.workflow_execution_id)] == [root_node.id]
+        assert [node.id for node in source.get_by_workflow_execution(root_node.workflow_execution_id)] == [
+            source_node.id
+        ]
+        restored_source = caller.for_workflow_tool("caller-app")
+        assert [node.id for node in restored_source.get_by_workflow_execution(root_node.workflow_execution_id)] == [
+            source_node.id
+        ]
+        mock_task.delay.assert_called_once_with(
+            execution_data=source_node.model_dump(),
+            tenant_id=RESOURCE_TENANT_ID,
+            app_id="caller-app",
+            triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_TOOL.value,
+            creator_user_id=end_user.id,
+            creator_user_role="end_user",
+        )
+
+    def test_init_with_sessionmaker(self, sqlite_session_factory, account):
         """Test repository initialization with sessionmaker."""
         app_id = "test-app-id"
         triggered_from = WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN
 
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id=app_id,
             triggered_from=triggered_from,
         )
@@ -92,15 +217,15 @@ class TestCeleryWorkflowNodeExecutionRepository:
         assert repo._tenant_id == RESOURCE_TENANT_ID
         assert repo._app_id == app_id
         assert repo._triggered_from == triggered_from
-        assert repo._creator_user_id == mock_account.id
+        assert repo._creator_user_id == account.id
         assert repo._creator_user_role is not None
 
-    def test_init_with_cache_initialized(self, mock_session_factory, mock_account):
+    def test_init_with_cache_initialized(self, sqlite_session_factory, account):
         """Test repository initialization with cache properly initialized."""
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.SINGLE_STEP,
         )
@@ -108,19 +233,19 @@ class TestCeleryWorkflowNodeExecutionRepository:
         assert repo._execution_cache == {}
         assert repo._workflow_execution_mapping == {}
 
-    def test_init_with_end_user(self, mock_session_factory, mock_end_user):
+    def test_init_with_end_user(self, sqlite_session_factory, end_user):
         """Test repository initialization with EndUser."""
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_end_user,
+            user=end_user,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
 
         assert repo._tenant_id == RESOURCE_TENANT_ID
 
-    def test_init_without_tenant_id_raises_error(self, mock_session_factory):
+    def test_init_without_tenant_id_raises_error(self, sqlite_session_factory):
         """Test that initialization fails without tenant_id."""
         # Create an Account with no tenant_id.
         user = Account(name="Test Account", email="test@example.com")
@@ -128,19 +253,19 @@ class TestCeleryWorkflowNodeExecutionRepository:
 
         with pytest.raises(ValueError, match="tenant_id is required"):
             CeleryWorkflowNodeExecutionRepository(
-                session_factory=mock_session_factory,
+                session_factory=sqlite_session_factory,
                 tenant_id="",
                 user=user,
                 app_id="test-app",
                 triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
             )
 
-    def test_init_uses_resource_tenant_when_account_has_no_current_tenant(self, mock_session_factory):
+    def test_init_uses_resource_tenant_when_account_has_no_current_tenant(self, sqlite_session_factory):
         user = Account(name="Test Account", email="test@example.com")
         user.id = str(uuid4())
 
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
             user=user,
             app_id="test-app",
@@ -152,13 +277,13 @@ class TestCeleryWorkflowNodeExecutionRepository:
 
     @patch("core.repositories.celery_workflow_node_execution_repository.save_workflow_node_execution_task")
     def test_save_caches_and_queues_celery_task(
-        self, mock_task, mock_session_factory, mock_account, sample_workflow_node_execution
+        self, mock_task, sqlite_session_factory, account, sample_workflow_node_execution
     ):
         """Test that save operation caches execution and queues a Celery task."""
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -173,7 +298,7 @@ class TestCeleryWorkflowNodeExecutionRepository:
         assert call_args["tenant_id"] == RESOURCE_TENANT_ID
         assert call_args["app_id"] == "test-app"
         assert call_args["triggered_from"] == WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN
-        assert call_args["creator_user_id"] == mock_account.id
+        assert call_args["creator_user_id"] == account.id
 
         # Verify execution is cached
         assert sample_workflow_node_execution.id in repo._execution_cache
@@ -187,12 +312,12 @@ class TestCeleryWorkflowNodeExecutionRepository:
         )
 
     def test_save_synchronously_uses_sql_repository_without_queueing(
-        self, mock_session_factory, mock_account, sample_workflow_node_execution
+        self, sqlite_session_factory, account, sample_workflow_node_execution
     ):
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -205,15 +330,15 @@ class TestCeleryWorkflowNodeExecutionRepository:
 
     @patch("core.repositories.celery_workflow_node_execution_repository.save_workflow_node_execution_task")
     def test_save_handles_celery_failure(
-        self, mock_task, mock_session_factory, mock_account, sample_workflow_node_execution
+        self, mock_task, sqlite_session_factory, account, sample_workflow_node_execution
     ):
         """Test that save operation handles Celery task failures."""
         mock_task.delay.side_effect = Exception("Celery is down")
 
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -223,13 +348,13 @@ class TestCeleryWorkflowNodeExecutionRepository:
 
     @patch("core.repositories.celery_workflow_node_execution_repository.save_workflow_node_execution_task")
     def test_get_by_workflow_execution_from_cache(
-        self, mock_task, mock_session_factory, mock_account, sample_workflow_node_execution
+        self, mock_task, sqlite_session_factory, account, sample_workflow_node_execution
     ):
         """Test that get_by_workflow_execution retrieves executions from cache."""
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -247,12 +372,12 @@ class TestCeleryWorkflowNodeExecutionRepository:
         assert result[0].id == sample_workflow_node_execution.id
         assert result[0] is sample_workflow_node_execution
 
-    def test_get_by_workflow_execution_without_order_config(self, mock_session_factory, mock_account):
+    def test_get_by_workflow_execution_without_order_config(self, sqlite_session_factory, account):
         """Test get_by_workflow_execution without order configuration."""
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -263,12 +388,12 @@ class TestCeleryWorkflowNodeExecutionRepository:
         assert len(result) == 0
 
     def test_get_by_workflow_execution_loads_persisted_executions_on_cache_miss(
-        self, mock_session_factory, mock_account, sample_workflow_node_execution
+        self, sqlite_session_factory, account, sample_workflow_node_execution
     ):
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -285,12 +410,12 @@ class TestCeleryWorkflowNodeExecutionRepository:
 
     @patch("core.repositories.celery_workflow_node_execution_repository.save_workflow_node_execution_task")
     def test_get_by_workflow_execution_merges_database_and_newer_cache(
-        self, mock_task, mock_session_factory, mock_account, sample_workflow_node_execution
+        self, mock_task, sqlite_session_factory, account, sample_workflow_node_execution
     ):
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -317,12 +442,12 @@ class TestCeleryWorkflowNodeExecutionRepository:
         assert result[1] is sample_workflow_node_execution
 
     @patch("core.repositories.celery_workflow_node_execution_repository.save_workflow_node_execution_task")
-    def test_cache_operations(self, mock_task, mock_session_factory, mock_account, sample_workflow_node_execution):
+    def test_cache_operations(self, mock_task, sqlite_session_factory, account, sample_workflow_node_execution):
         """Test cache operations work correctly."""
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -339,12 +464,12 @@ class TestCeleryWorkflowNodeExecutionRepository:
         assert result[0].id == sample_workflow_node_execution.id
 
     @patch("core.repositories.celery_workflow_node_execution_repository.save_workflow_node_execution_task")
-    def test_multiple_executions_same_workflow(self, mock_task, mock_session_factory, mock_account):
+    def test_multiple_executions_same_workflow(self, mock_task, sqlite_session_factory, account):
         """Test multiple executions for the same workflow."""
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
+            session_factory=sqlite_session_factory,
             tenant_id=RESOURCE_TENANT_ID,
-            user=mock_account,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
@@ -391,12 +516,12 @@ class TestCeleryWorkflowNodeExecutionRepository:
         assert len(result) == 2
 
     @patch("core.repositories.celery_workflow_node_execution_repository.save_workflow_node_execution_task")
-    def test_ordering_functionality(self, mock_task, mock_session_factory, mock_account):
+    def test_ordering_functionality(self, mock_task, sqlite_session_factory, account):
         """Test ordering functionality works correctly."""
         repo = CeleryWorkflowNodeExecutionRepository(
-            session_factory=mock_session_factory,
-            tenant_id=mock_account.current_tenant_id,
-            user=mock_account,
+            session_factory=sqlite_session_factory,
+            tenant_id=account.current_tenant_id,
+            user=account,
             app_id="test-app",
             triggered_from=WorkflowNodeExecutionTriggeredFrom.WORKFLOW_RUN,
         )
