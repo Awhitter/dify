@@ -116,3 +116,22 @@ describe('error_sso dedicated view', () => {
     expect(document.title).toBe('deviceFlow.codeEntry.title - Dify')
   })
 })
+
+describe('url user_code consumption when signed out', () => {
+  it('calls router.replace once even before searchParams clears asynchronously', async () => {
+    // Mirror real Next.js App Router: router.replace is async, so searchParams still
+    // holds user_code on the render triggered by setView({ kind: 'chooser', ... }).
+    mockReplace.mockImplementation(() => {})
+    mockSearchParams = { user_code: VALID_CODE }
+
+    render(<DevicePage />, { accountProfile: null })
+
+    expect(await screen.findByRole('heading', { name: 'deviceFlow.chooser.title' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /deviceFlow.chooser.signInAccount/i })).toHaveAttribute(
+      'href',
+      '/signin',
+    )
+    expect(mockReplace).toHaveBeenCalledTimes(1)
+    expect(mockReplace).toHaveBeenCalledWith('/device')
+  })
+})
