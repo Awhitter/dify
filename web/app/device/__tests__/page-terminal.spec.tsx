@@ -126,11 +126,10 @@ describe('url user_code consumption when signed out', () => {
 
     render(<DevicePage />, { accountProfile: null })
 
-    expect(await screen.findByRole('heading', { name: 'deviceFlow.chooser.title' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /deviceFlow.chooser.signInAccount/i })).toHaveAttribute(
-      'href',
-      '/signin',
-    )
+    const chooserTitle = 'deviceFlow.chooser.title'
+    expect(await screen.findByRole('heading', { name: chooserTitle })).toBeInTheDocument()
+    const signInLink = screen.getByRole('link', { name: /deviceFlow.chooser.signInAccount/i })
+    expect(signInLink).toHaveAttribute('href', '/signin')
     expect(mockReplace).toHaveBeenCalledTimes(1)
     expect(mockReplace).toHaveBeenCalledWith('/device')
   })
